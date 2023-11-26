@@ -1,9 +1,17 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
+use cgmath::{vec2, vec3};
 
 use super::app::App;
 use super::appdata::AppData;
 use super::shader;
+use super::vertex::Vertex;
+
+pub static VERTICES: [Vertex; 3] = [
+    Vertex::new(vec2(0.0, -0.5), vec3(1.0, 1.0, 1.0)),
+    Vertex::new(vec2(0.5, 0.5), vec3(0.0, 1.0, 0.0)),
+    Vertex::new(vec2(-0.5, 0.5), vec3(0.0, 0.0, 1.0)),
+];
 
 pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()> {
     let vert = include_bytes!("../../shaders_compiled/vert.spv");
@@ -12,7 +20,13 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
     let vert_shader_module = shader::create_shader_module(device, vert)?;
     let frag_shader_module = shader::create_shader_module(device, frag)?;
 
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+    let binding_description: &[vk::VertexInputBindingDescription; 1] 
+        = &[Vertex::binding_description()];
+    let attribute_descriptions: &[vk::VertexInputAttributeDescription; 2] 
+        = &Vertex::attribute_descriptions();
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+        .vertex_binding_descriptions(binding_description)
+        .vertex_attribute_descriptions(attribute_descriptions);
 
     let vert_stage = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::VERTEX)

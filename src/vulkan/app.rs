@@ -19,7 +19,7 @@ use super::{
     swapchain,
     sync_objects,
     validation_layers,
-    window_surface,
+    window_surface, vertex,
 };
 
 /// Our Vulkan app.
@@ -53,6 +53,7 @@ impl App {
 
         framebuffer::create_framebuffers(&device, &mut data)?;
         command_buffers::create_command_pool(&instance, &device, &mut data)?;
+        vertex::create_vertex_buffer(&instance, &device, &mut data)?;
         command_buffers::create_command_buffers(&device, &mut data)?;
         sync_objects::create_sync_objects(&device, &mut data)?;
 
@@ -137,6 +138,7 @@ impl App {
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) {
         self.destroy_swapchain();
+        vertex::destroy_vertex_buffer(self);
 
         sync_objects::destroy_sync_objects(self);
         command_buffers::destroy_command_pool(self);

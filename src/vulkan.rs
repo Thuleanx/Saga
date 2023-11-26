@@ -14,6 +14,7 @@ mod shader;
 mod swapchain;
 mod sync_objects;
 mod validation_layers;
+mod vertex;
 mod window_surface;
 
 pub use self::app::App;
