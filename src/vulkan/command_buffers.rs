@@ -3,7 +3,7 @@ use vulkanalia::prelude::v1_0::*;
 
 use super::app::App;
 use super::appdata::AppData;
-use super::pipeline::VERTICES;
+use super::pipeline::INDICES;
 use super::queue_families::QueueFamilyIndices;
 
 pub unsafe fn create_command_buffers(
@@ -51,9 +51,10 @@ pub unsafe fn create_command_buffers(
             let first_binding = 0;
             let memory_offsets = [0];
             device.cmd_bind_vertex_buffers(*command_buffer, first_binding, &[data.vertex_buffer], &memory_offsets);
+            device.cmd_bind_index_buffer(*command_buffer, data.index_buffer, memory_offsets[0], vk::IndexType::UINT16);
         }
 
-        device.cmd_draw(*command_buffer, VERTICES.len() as u32, 1, 0, 0);
+        device.cmd_draw_indexed(*command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
         device.cmd_end_render_pass(*command_buffer);
 
         device.end_command_buffer(*command_buffer)?;

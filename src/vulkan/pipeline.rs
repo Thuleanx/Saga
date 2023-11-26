@@ -7,11 +7,14 @@ use super::appdata::AppData;
 use super::shader;
 use super::vertex::Vertex;
 
-pub static VERTICES: [Vertex; 3] = [
-    Vertex::new(vec2(0.0, -0.5), vec3(1.0, 1.0, 1.0)),
-    Vertex::new(vec2(0.5, 0.5), vec3(0.0, 1.0, 0.0)),
-    Vertex::new(vec2(-0.5, 0.5), vec3(0.0, 0.0, 1.0)),
+pub static VERTICES: [Vertex; 4] = [
+    Vertex::new(vec2(-0.5, -0.5), vec3(1.0, 0.0, 0.0)),
+    Vertex::new(vec2(0.5, -0.5), vec3(0.0, 1.0, 0.0)),
+    Vertex::new(vec2(0.5, 0.5), vec3(0.0, 0.0, 1.0)),
+    Vertex::new(vec2(-0.5, 0.5), vec3(1.0, 1.0, 1.0)),
 ];
+
+pub static INDICES : &[u16] = &[0, 1, 2, 2, 3, 0];
 
 pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()> {
     let vert = include_bytes!("../../shaders_compiled/vert.spv");
