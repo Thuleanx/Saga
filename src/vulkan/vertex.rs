@@ -185,7 +185,7 @@ unsafe fn copy_buffer(
     Ok(())
 }
 
-unsafe fn create_buffer(
+pub unsafe fn create_buffer(
     instance: &Instance, 
     device: &Device, 
     data: &mut AppData,

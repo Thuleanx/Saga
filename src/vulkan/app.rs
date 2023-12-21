@@ -7,6 +7,7 @@ use vulkanalia::vk::{KhrSwapchainExtension, Fence};
 use super::appdata::AppData;
 
 use super::config::MAX_FRAMES_IN_FLIGHT;
+use std::time::Instant;
 
 use super::{
     command_buffers,
@@ -19,7 +20,9 @@ use super::{
     swapchain,
     sync_objects,
     validation_layers,
-    window_surface, vertex,
+    window_surface, 
+    vertex, 
+    uniform_buffer_object, descriptor_set,
 };
 
 /// Our Vulkan app.
@@ -31,6 +34,7 @@ pub struct App {
     pub device: Device,
     pub frame: usize,
     pub resized: bool,
+    pub start: Instant,
 }
 
 impl App {
@@ -47,19 +51,22 @@ impl App {
         let device = logical_device::create_logical_device(&entry, &instance, &mut data)?;
         swapchain::create_swapchain(window, &instance, &device, &mut data)?;
         swapchain::create_swapchain_image_views(&device, &mut data)?;
-
         renderpass::create_render_pass(&instance, &device, &mut data)?;
+
+        uniform_buffer_object::create_descriptor_set_layout(&device, &mut data)?;
         pipeline::create_pipeline(&device, &mut data)?;
 
         framebuffer::create_framebuffers(&device, &mut data)?;
         command_buffers::create_command_pool(&instance, &device, &mut data)?;
         vertex::create_vertex_buffer(&instance, &device, &mut data)?;
         vertex::create_index_buffer(&instance, &device, &mut data)?;
+        uniform_buffer_object::create_uniform_buffers(&instance, &device, &mut data)?;
+        descriptor_set::create_descriptor_pool(&device, &mut data)?;
+        descriptor_set::create_descriptor_sets(&device, &mut data)?;
         command_buffers::create_command_buffers(&device, &mut data)?;
         sync_objects::create_sync_objects(&device, &mut data)?;
 
-
-        Ok(Self { entry, instance, data, device, frame: 0, resized: false})
+        Ok(Self { entry, instance, data, device, frame: 0, resized: false, start: Instant::now() })
     }
 
     /// Renders a frame for our Vulkan app.
@@ -95,6 +102,8 @@ impl App {
         }
 
         self.data.images_in_flight[image_index] = in_flight_fence;
+
+        uniform_buffer_object::update_uniform_buffer(self, image_index)?;
 
         let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -139,6 +148,7 @@ impl App {
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) {
         self.destroy_swapchain();
+        uniform_buffer_object::destroy_descriptor_set_layout(self);
         vertex::destroy_vertex_buffer(self);
         vertex::destroy_index_buffer(self);
 
@@ -161,6 +171,9 @@ impl App {
         renderpass::create_render_pass(&self.instance, &self.device, &mut self.data)?;
         pipeline::create_pipeline(&self.device, &mut self.data)?;
         framebuffer::create_framebuffers(&self.device, &mut self.data)?;
+        uniform_buffer_object::create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
+        descriptor_set::create_descriptor_pool(&self.device, &mut self.data)?;
+        descriptor_set::create_descriptor_sets(&self.device, &mut self.data)?;
         command_buffers::create_command_buffers(&self.device, &mut self.data)?;
         self.data
             .images_in_flight
@@ -170,10 +183,12 @@ impl App {
     }
 
     unsafe fn destroy_swapchain(&mut self) {
+        self.device.free_command_buffers(self.data.command_pool, &self.data.command_buffers);
+        uniform_buffer_object::destroy_uniform_buffers(self);
+        descriptor_set::destroy_descriptor_pool(self);
         self.data.framebuffers
             .iter()
             .for_each(|f| self.device.destroy_framebuffer(*f, None));
-        self.device.free_command_buffers(self.data.command_pool, &self.data.command_buffers);
         self.device.destroy_pipeline(self.data.pipeline, None);
         self.device.destroy_pipeline_layout(self.data.pipeline_layout, None);
         self.device.destroy_render_pass(self.data.render_pass, None);
@@ -182,4 +197,5 @@ impl App {
             .for_each(|v| self.device.destroy_image_view(*v, None));
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
+
 }
