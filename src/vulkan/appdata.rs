@@ -1,5 +1,6 @@
 // Instance
 use vulkanalia::prelude::v1_0::*;
+use crate::saga::{PerspectiveCamera, input::Input};
 
 /// The Vulkan handles and associated properties used by our Vulkan app.
 #[derive(Clone, Debug, Default)]
@@ -33,4 +34,7 @@ pub struct AppData {
     pub uniform_buffers_memory: Vec<vk::DeviceMemory>,
     pub descriptor_pool : vk::DescriptorPool,
     pub descriptor_sets : Vec<vk::DescriptorSet>,
+    pub camera: PerspectiveCamera,
+    pub input: Input,
 }
+

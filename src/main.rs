@@ -6,10 +6,13 @@
     )]
 
 mod vulkan;
+mod saga;
+mod core;
 
 use crate::vulkan::App;
 
 use anyhow::Result;
+use saga::common_traits::GameObject;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -22,7 +25,6 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
 
     // Window
-
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Saga Engine")
@@ -30,16 +32,48 @@ fn main() -> Result<()> {
         .build(&event_loop)?;
 
     // App
-
     let mut app = unsafe { App::create(&window)? };
     let mut destroying : bool = false;
     let mut minimized : bool = false;
+
+    let mut last_frame_time = app.start.elapsed().as_secs_f32();
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
+        // input handling
+        match event {
+            Event::WindowEvent {
+                // Note this deeply nested pattern match
+                event: WindowEvent::KeyboardInput {
+                    input:key_ev,
+                    ..
+                },
+                ..
+            } => {
+                app.data.input.handle_key_event(key_ev);
+            },
+            Event::WindowEvent {
+                event: WindowEvent::MouseInput { state, button, .. },
+                ..
+            } => {
+                // input.handle_mouse_button(state, button);
+            }
+            Event::WindowEvent {
+                event: WindowEvent::CursorMoved { position, .. },
+                ..
+            } => {
+                // input.handle_mouse_move(position);
+            },
+            _ => ()
+        }
         match event {
             // Render a frame if our Vulkan app is not being destroyed.
-            Event::MainEventsCleared if !destroying && !minimized =>
-                unsafe { app.render(&window) }.unwrap(),
+            Event::MainEventsCleared if !destroying && !minimized => {
+                let current_time = app.start.elapsed().as_secs_f32();
+                (app.data.camera).update(&app.data.input, current_time - last_frame_time);
+                last_frame_time = current_time;
+                unsafe { app.render(&window)}.unwrap()
+            },
             Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
                 if size.width == 0 || size.height == 0 {
                     minimized = true;
@@ -54,7 +88,7 @@ fn main() -> Result<()> {
                 *control_flow = ControlFlow::Exit;
                 unsafe { app.device.device_wait_idle().unwrap(); }
                 unsafe { app.destroy(); }
-            }
+            },
             _ => {}
         }
     });

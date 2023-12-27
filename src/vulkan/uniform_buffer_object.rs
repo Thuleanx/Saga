@@ -3,6 +3,8 @@ use std::mem::size_of;
 use vulkanalia::prelude::v1_0::*;
 
 use cgmath::{Matrix4, Deg, point3, vec3};
+use crate::saga::Camera;
+
 use super::{appdata::AppData, App};
 use std::ptr::copy_nonoverlapping as memcpy;
 type Mat4 = cgmath::Matrix4<f32>;
@@ -80,6 +82,7 @@ pub unsafe fn update_uniform_buffer(app: &App, image_index: usize) -> Result<()>
         Deg(90.0) * time
     );
 
+    /*
     let view = Matrix4::look_at_rh(
         point3(2.0, 2.0, 2.0), 
         point3(0.0, 0.0, 0.9), 
@@ -95,6 +98,10 @@ pub unsafe fn update_uniform_buffer(app: &App, image_index: usize) -> Result<()>
     // since cmath is designed for OpenGL, the Y coordinate of the the clip coordinate is
     // inverted as opposed to 
     proj[1][1] *= -1.0;
+    */
+
+    let view = app.data.camera.get_cached_view_matrix();
+    let proj = app.data.camera.get_cached_projection_matrix();
     
     let ubo = UniformBufferObject { model, view, proj };
 

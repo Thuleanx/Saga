@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Result};
 
+use cgmath::vec3;
 use vulkanalia::prelude::v1_0::*;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use winit::window::Window;
 use vulkanalia::vk::{KhrSwapchainExtension, Fence};
+use crate::saga::PerspectiveCameraBuilder;
+
 use super::appdata::AppData;
 
 use super::config::MAX_FRAMES_IN_FLIGHT;
@@ -43,6 +46,16 @@ impl App {
         let loader = LibloadingLoader::new(LIBRARY)?;
         let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
         let mut data = AppData::default();
+
+        let size = window.inner_size();
+        data.camera = {
+            let mut camera_builder = PerspectiveCameraBuilder::default();
+            camera_builder
+                .set_width(size.width)
+                .set_height(size.height);
+            camera_builder.build()
+        };
+
         let instance = instance::create_instance(window, &entry, &mut data)?;
 
         window_surface::create_window_surface(&instance, window, &mut data)?;
@@ -135,6 +148,10 @@ impl App {
 
         if self.resized || changed {
             self.resized = false;
+
+            let size = window.inner_size();
+            self.data.camera.set_width(size.width);
+            self.data.camera.set_height(size.height);
             self.recreate_swapchain(window)?;
         } else if let Err(e) = result {
             return Err(anyhow!(e));
