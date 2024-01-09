@@ -1,19 +1,19 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
+use vulkanalia::vk::DebugUtilsMessengerEXT;
 use vulkanalia::window as vk_window;
 
 use winit::window::Window;
 use log::*;
 
-use super::appdata::AppData;
-use super::config::PORTABILITY_MACOS_VERSION;
-use super::{validation_layers, App};
+use crate::core::config::PORTABILITY_MACOS_VERSION;
+use super::validation_layers;
 
 /// Create an instance of Vulkan with added checks and features:
 /// - flags to enable portability extensions for MacOS
 /// - application info with the Saga engine version
 /// - validation layers
-pub unsafe fn create_instance(window: &Window, entry: &Entry, data: &mut AppData) -> Result<Instance> {
+pub unsafe fn create_instance(window: &Window, entry: &Entry) -> Result<(Instance, Option<DebugUtilsMessengerEXT>)> {
     // Optional
     let application_info = vk::ApplicationInfo::builder()
         .application_name(b"Saga Engine\0")
@@ -37,11 +37,11 @@ pub unsafe fn create_instance(window: &Window, entry: &Entry, data: &mut AppData
         vk::InstanceCreateFlags::empty()
     };
 
-    let instance = validation_layers::create_instance_with_debug(
-        entry, data, application_info, extensions, flags)?;
-    Ok(instance)
+    let (instance, messenger) = validation_layers::create_instance_with_debug(
+        entry, application_info, extensions, flags)?;
+    Ok((instance, messenger))
 }
 
-pub unsafe fn destroy_instance(app: &App) {
-    app.instance.destroy_instance(None);
+pub unsafe fn destroy_instance(instance: &Instance) {
+    instance.destroy_instance(None);
 }

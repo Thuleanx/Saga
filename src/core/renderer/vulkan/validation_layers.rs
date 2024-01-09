@@ -1,4 +1,4 @@
-use vulkanalia::prelude::v1_0::*;
+use vulkanalia::{prelude::v1_0::*, vk::DebugUtilsMessengerEXT};
 use vulkanalia::vk::ExtDebugUtilsExtension;
 use std::collections::HashSet;
 use anyhow::{anyhow, Result};
@@ -6,10 +6,7 @@ use std::ffi::CStr;
 use std::os::raw::c_void;
 use log::*;
 
-use super::app::App;
-use super::appdata::AppData;
-
-use super::config::{VALIDATION_ENABLED, VALIDATION_LAYER};
+use crate::core::config::{VALIDATION_ENABLED, VALIDATION_LAYER};
 
 pub unsafe fn get_validation_layers(entry: &Entry) -> Result<Vec<*const i8>> {
     let available_layers = entry
@@ -30,19 +27,16 @@ pub unsafe fn get_validation_layers(entry: &Entry) -> Result<Vec<*const i8>> {
     Ok(layers)
 }
 
-pub unsafe fn destroy_debug_messenger(app: &App) {
-    if VALIDATION_ENABLED {
-        app.instance.destroy_debug_utils_messenger_ext(app.data.messenger, None);
-    }
+pub unsafe fn destroy_debug_messenger(instance: &Instance, messenger: DebugUtilsMessengerEXT) {
+    instance.destroy_debug_utils_messenger_ext(messenger, None);
 }
 
 pub unsafe fn create_instance_with_debug(
     entry: &Entry,
-    data: &mut AppData,
     application_info : vk::ApplicationInfoBuilder,
     mut extensions: Vec<*const i8>,
     flags: vk::InstanceCreateFlags,
-) -> Result<Instance> {
+) -> Result<(Instance, Option<DebugUtilsMessengerEXT>)> {
 
     if VALIDATION_ENABLED {
         extensions.push(vk::EXT_DEBUG_UTILS_EXTENSION.name.as_ptr());
@@ -72,10 +66,11 @@ pub unsafe fn create_instance_with_debug(
             .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
             .user_callback(Some(debug_callback));
 
-        data.messenger = instance.create_debug_utils_messenger_ext(&debug_info, None)?;
+        let messenger = instance.create_debug_utils_messenger_ext(&debug_info, None)?;
+        return Ok((instance, Some(messenger)));
     }
 
-    Ok(instance)
+    Ok((instance, None))
 }
 
 extern "system" fn debug_callback(

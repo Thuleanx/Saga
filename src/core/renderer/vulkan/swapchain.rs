@@ -4,8 +4,6 @@ use vulkanalia::vk::KhrSurfaceExtension;
 use vulkanalia::vk::KhrSwapchainExtension;
 use winit::window::Window;
 
-use super::app::App;
-use super::appdata::AppData;
 use super::queue_families::QueueFamilyIndices;
 
 #[derive(Clone, Debug)]
@@ -18,16 +16,16 @@ struct SwapchainSupport {
 impl SwapchainSupport {
     unsafe fn get(
         instance: &Instance,
-        data: &AppData,
+        window_surface: vk::SurfaceKHR,
         physical_device: vk::PhysicalDevice,
     )-> Result<Self> {
         Ok(Self {
             capabilities: instance
-                .get_physical_device_surface_capabilities_khr(physical_device, data.surface)?,
+                .get_physical_device_surface_capabilities_khr(physical_device, window_surface)?,
             formats: instance
-                .get_physical_device_surface_formats_khr(physical_device, data.surface)?,
+                .get_physical_device_surface_formats_khr(physical_device, window_surface)?,
             present_modes: instance
-                .get_physical_device_surface_present_modes_khr(physical_device, data.surface)?
+                .get_physical_device_surface_present_modes_khr(physical_device, window_surface)?
         })
     }
 }
@@ -81,11 +79,12 @@ pub unsafe fn create_swapchain(
     window: &Window,
     instance: &Instance,
     device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
+    window_surface: vk::SurfaceKHR,
+    physical_device: vk::PhysicalDevice,
+) -> Result<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
 
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
-    let support = SwapchainSupport::get(instance, data, data.physical_device)?;
+    let indices = QueueFamilyIndices::get(instance, window_surface, physical_device)?;
+    let support = SwapchainSupport::get(instance, window_surface, physical_device)?;
 
     let surface_format = get_swapchain_surface_format(&support.formats);
     let present_mode = get_swapchain_present_mode(&support.present_modes);
@@ -104,7 +103,7 @@ pub unsafe fn create_swapchain(
     };
 
     let info = vk::SwapchainCreateInfoKHR::builder()
-        .surface(data.surface)
+        .surface(window_surface)
         .min_image_count(image_count)
         .image_format(surface_format.format)
         .image_color_space(surface_format.color_space)
@@ -119,20 +118,20 @@ pub unsafe fn create_swapchain(
         .clipped(true)
         .old_swapchain(vk::SwapchainKHR::null());
 
-    data.swapchain = device.create_swapchain_khr(&info, None)?;
-    data.swapchain_images = device.get_swapchain_images_khr(data.swapchain)?;
-    data.swapchain_format = surface_format.format;
-    data.swapchain_extent = extent;
+    let swapchain = device.create_swapchain_khr(&info, None)?;
+    let swapchain_images = device.get_swapchain_images_khr(swapchain)?;
+    let swapchain_format : vk::Format = surface_format.format;
+    let swapchain_extent = extent;
 
-    Ok(())
+    Ok((swapchain, swapchain_images, swapchain_format, swapchain_extent))
 }
 
 pub unsafe fn create_swapchain_image_views(
     device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    data.swapchain_image_views = data
-        .swapchain_images
+    swapchain_images: &Vec<vk::Image>,
+    swapchain_format: vk::Format,
+) -> Result<Vec<vk::ImageView>> {
+    let swapchain_image_views = swapchain_images
         .iter()
         .map(|i| {
             let components = vk::ComponentMapping::builder()
@@ -150,20 +149,21 @@ pub unsafe fn create_swapchain_image_views(
             let info = vk::ImageViewCreateInfo::builder()
                 .image(*i)
                 .view_type(vk::ImageViewType::_2D)
-                .format(data.swapchain_format)
+                .format(swapchain_format)
                 .components(components)
                 .subresource_range(subresource_range);
 
             device.create_image_view(&info, None)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(())
+    Ok(swapchain_image_views)
 }
 
-pub unsafe fn destroy_swapchain_and_image_views(app: &App) {
-    app.data.swapchain_image_views
+pub unsafe fn destroy_swapchain_and_image_views(device: &Device, 
+        swapchain: vk::SwapchainKHR, swapchain_image_views: Vec<vk::ImageView>) {
+    swapchain_image_views
         .iter()
-        .for_each(|v| app.device.destroy_image_view(*v, None));
-    app.device.destroy_swapchain_khr(app.data.swapchain, None);
+        .for_each(|v| device.destroy_image_view(*v, None));
+    device.destroy_swapchain_khr(swapchain, None);
 }
 

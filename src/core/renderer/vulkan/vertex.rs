@@ -3,12 +3,7 @@ use anyhow::{Result, anyhow};
 use vulkanalia::prelude::v1_0::*;
 use vulkanalia::vk::{self, HasBuilder};
 
-use crate::vulkan::pipeline::INDICES;
-
-use super::App;
-use super::appdata::AppData;
-
-use super::pipeline::VERTICES;
+use super::pipeline::{VERTICES, INDICES};
 
 type Vec2 = cgmath::Vector2<f32>;
 type Vec3 = cgmath::Vector3<f32>;
@@ -50,14 +45,22 @@ impl Vertex {
     }
 }
 
-pub unsafe fn create_vertex_buffer(instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
+pub unsafe fn create_vertex_buffer(instance: &Instance, 
+    device: &Device, 
+    physical_device: vk::PhysicalDevice,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+) -> Result<(vk::Buffer, vk::DeviceMemory)> {
     use std::ptr::copy_nonoverlapping as memcpy;
 
     let size: u64 = (size_of::<Vertex>() * VERTICES.len()) as u64;
 
+    let memory_property_flags = vk::MemoryPropertyFlags::HOST_COHERENT | 
+        vk::MemoryPropertyFlags::HOST_VISIBLE;
     let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance, device, data, 
-        size, vk::BufferUsageFlags::TRANSFER_SRC, vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
+        instance, device, physical_device,
+        size, vk::BufferUsageFlags::TRANSFER_SRC, 
+        memory_property_flags)?;
 
     let memory_offset: u64 = 0;
     let gpu_memory = device.map_memory(
@@ -72,29 +75,35 @@ pub unsafe fn create_vertex_buffer(instance: &Instance, device: &Device, data: &
     device.unmap_memory(staging_buffer_memory);
 
     let (vertex_buffer, vertex_buffer_memory) = create_buffer(
-        instance, device, data, 
+        instance, device, physical_device,
         size, vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
 
-    data.vertex_buffer = vertex_buffer;
-    data.vertex_buffer_memory = vertex_buffer_memory;
-
-    copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
+    copy_buffer(device, staging_buffer, vertex_buffer, size, command_pool, graphics_queue)?;
 
     device.destroy_buffer(staging_buffer, None);
     device.free_memory(staging_buffer_memory, None);
 
-    Ok(())
+    Ok((vertex_buffer, vertex_buffer_memory))
 }
 
-pub unsafe fn create_index_buffer(instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
+pub unsafe fn create_index_buffer(
+    instance: &Instance, 
+    device: &Device, 
+    physical_device: vk::PhysicalDevice, 
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+) -> Result<(vk::Buffer, vk::DeviceMemory)> {
     use std::ptr::copy_nonoverlapping as memcpy;
 
     let size: u64 = (size_of::<u16>() * INDICES.len()) as u64;
 
+    let memory_property_flags = vk::MemoryPropertyFlags::HOST_COHERENT | 
+                                vk::MemoryPropertyFlags::HOST_VISIBLE;
     let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance, device, data, 
-        size, vk::BufferUsageFlags::TRANSFER_SRC, vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE)?;
+        instance, device, physical_device, size, 
+        vk::BufferUsageFlags::TRANSFER_SRC, 
+        memory_property_flags)?;
 
     let memory_offset: u64 = 0;
     let gpu_memory = device.map_memory(
@@ -109,28 +118,27 @@ pub unsafe fn create_index_buffer(instance: &Instance, device: &Device, data: &m
     device.unmap_memory(staging_buffer_memory);
 
     let (index_buffer, index_buffer_memory) = create_buffer(
-        instance, device, data, 
+        instance, device, physical_device,
         size, vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER, 
         vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
 
-    data.index_buffer = index_buffer;
-    data.index_buffer_memory = index_buffer_memory;
 
-    copy_buffer(device, data, staging_buffer, index_buffer, size)?;
+    copy_buffer(device, staging_buffer, index_buffer, size, 
+                command_pool, graphics_queue)?;
 
     device.destroy_buffer(staging_buffer, None);
     device.free_memory(staging_buffer_memory, None);
 
-    Ok(())
+    Ok((index_buffer, index_buffer_memory))
 }
 
 unsafe fn get_memory_type_index(
     instance: &Instance,
-    data: &AppData,
     properties: vk::MemoryPropertyFlags,
     requirements: vk::MemoryRequirements,
+    physical_device: vk::PhysicalDevice,
 ) -> Result<u32> {
-    let memory_properties: vk::PhysicalDeviceMemoryProperties = instance.get_physical_device_memory_properties(data.physical_device);
+    let memory_properties: vk::PhysicalDeviceMemoryProperties = instance.get_physical_device_memory_properties(physical_device);
 
     (0..memory_properties.memory_type_count)
         .find(|memory_type| {
@@ -148,15 +156,16 @@ unsafe fn get_memory_type_index(
  */
 unsafe fn copy_buffer(
     device: &Device,
-    data: &AppData,
     source: vk::Buffer,
     destination: vk::Buffer,
-    size: vk::DeviceSize
+    size: vk::DeviceSize,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
 ) -> Result<()> {
 
     let info = vk::CommandBufferAllocateInfo::builder()
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(data.command_pool)
+        .command_pool(command_pool)
         .command_buffer_count(1);
 
     let command_buffer = device.allocate_command_buffers(&info)?[0];
@@ -175,12 +184,12 @@ unsafe fn copy_buffer(
     let submit_info = vk::SubmitInfo::builder()
         .command_buffers(command_buffers);
 
-    device.queue_submit(data.graphics_queue, &[submit_info], vk::Fence::null())?;
+    device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null())?;
 
     // can optimize by using a fence
-    device.queue_wait_idle(data.graphics_queue)?;
+    device.queue_wait_idle(graphics_queue)?;
 
-    device.free_command_buffers(data.command_pool, command_buffers);
+    device.free_command_buffers(command_pool, command_buffers);
 
     Ok(())
 }
@@ -188,7 +197,7 @@ unsafe fn copy_buffer(
 pub unsafe fn create_buffer(
     instance: &Instance, 
     device: &Device, 
-    data: &mut AppData,
+    physical_device: vk::PhysicalDevice,
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
     properties: vk::MemoryPropertyFlags,
@@ -205,9 +214,9 @@ pub unsafe fn create_buffer(
 
     let memory_type_index : u32 = get_memory_type_index(
         instance, 
-        data, 
         properties,
         memory_requirements,
+        physical_device,
     )?;
 
     let memory_info = vk::MemoryAllocateInfo::builder()
@@ -222,12 +231,8 @@ pub unsafe fn create_buffer(
     Ok((buffer, buffer_memory))
 }
 
-pub unsafe fn destroy_vertex_buffer(app: &App) {
-    app.device.destroy_buffer(app.data.vertex_buffer, None);
-    app.device.free_memory(app.data.vertex_buffer_memory, None);
+pub unsafe fn destroy_buffer_and_free_memory(device: &Device, buffer: vk::Buffer, memory: vk::DeviceMemory) {
+    device.destroy_buffer(buffer, None);
+    device.free_memory(memory, None);
 }
 
-pub unsafe fn destroy_index_buffer(app: &App) {
-    app.device.destroy_buffer(app.data.index_buffer, None);
-    app.device.free_memory(app.data.index_buffer_memory, None);
-}

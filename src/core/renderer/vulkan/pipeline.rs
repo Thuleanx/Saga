@@ -2,8 +2,6 @@ use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 use cgmath::{vec2, vec3};
 
-use super::app::App;
-use super::appdata::AppData;
 use super::shader;
 use super::vertex::Vertex;
 
@@ -16,9 +14,15 @@ pub static VERTICES: [Vertex; 4] = [
 
 pub static INDICES : &[u16] = &[0, 1, 2, 2, 3, 0];
 
-pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()> {
-    let vert = include_bytes!("../../shaders_compiled/vert.spv");
-    let frag = include_bytes!("../../shaders_compiled/frag.spv");
+pub unsafe fn create_pipeline(
+    device: &Device, 
+    swapchain_extent: vk::Extent2D, 
+    set_layout: vk::DescriptorSetLayout,
+    render_pass: vk::RenderPass,
+) -> Result<(vk::PipelineLayout, vk::Pipeline)> {
+
+    let vert = include_bytes!("../../../../shaders_compiled/vert.spv");
+    let frag = include_bytes!("../../../../shaders_compiled/frag.spv");
 
     let vert_shader_module = shader::create_shader_module(device, vert)?;
     let frag_shader_module = shader::create_shader_module(device, frag)?;
@@ -48,14 +52,14 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
     let viewport = vk::Viewport::builder()
         .x(0.0)
         .y(0.0)
-        .width(data.swapchain_extent.width as f32)
-        .height(data.swapchain_extent.height as f32)
+        .width(swapchain_extent.width as f32)
+        .height(swapchain_extent.height as f32)
         .min_depth(0.0)
         .max_depth(1.0);
 
     let scissor = vk::Rect2D::builder()
         .offset(vk::Offset2D {x: 0, y: 0})
-        .extent(data.swapchain_extent);
+        .extent(swapchain_extent);
 
     let viewports = &[viewport];
     let scissors = &[scissor];
@@ -93,11 +97,11 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .attachments(attachments)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
 
-    let set_layouts = &[data.descriptor_set_layout];
+    let set_layouts = &[set_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(set_layouts);
 
-    data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
+    let pipeline_layout: vk::PipelineLayout = device.create_pipeline_layout(&layout_info, None)?;
 
     let stages = &[vert_stage, frag_stage];
     let info = vk::GraphicsPipelineCreateInfo::builder()
@@ -108,21 +112,21 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .rasterization_state(&rasterization_state)
         .multisample_state(&multisample_state)
         .color_blend_state(&color_blend_state)
-        .layout(data.pipeline_layout)
-        .render_pass(data.render_pass)
+        .layout(pipeline_layout)
+        .render_pass(render_pass)
         .subpass(0)
         .base_pipeline_handle(vk::Pipeline::null())
         .base_pipeline_index(-1);
 
-    data.pipeline = device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)?.0[0];
+    let pipeline: vk::Pipeline = device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)?.0[0];
 
     shader::destroy_shader_module(device, vert_shader_module);
     shader::destroy_shader_module(device, frag_shader_module);
 
-    Ok(())
+    Ok((pipeline_layout, pipeline))
 }
 
-pub unsafe fn destroy_pipeline(app: &App) {
-    app.device.destroy_pipeline(app.data.pipeline, None);
-    app.device.destroy_pipeline_layout(app.data.pipeline_layout, None);
+pub unsafe fn destroy_pipeline(device: &Device, pipeline: vk::Pipeline, pipeline_layout: vk::PipelineLayout) {
+    device.destroy_pipeline(pipeline, None);
+    device.destroy_pipeline_layout(pipeline_layout, None);
 }

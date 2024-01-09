@@ -3,37 +3,30 @@ use log::*;
 use std::collections::HashSet;
 use vulkanalia::prelude::v1_0::*;
 
-use super::app::App;
-use super::appdata::AppData;
-use super::config::DEVICE_EXTENSIONS;
+use crate::core::config::DEVICE_EXTENSIONS;
 use super::errors::SuitabilityError;
 use super::queue_families::QueueFamilyIndices;
 
-pub unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> {
+pub unsafe fn pick_physical_device(instance: &Instance, window_surface: vk::SurfaceKHR) -> Result<vk::PhysicalDevice> {
+   
     for physical_device in instance.enumerate_physical_devices()? {
         let properties = instance.get_physical_device_properties(physical_device);
 
-        if let Err(error) = check_physical_device(instance, data, physical_device) {
+        if let Err(error) = check_physical_device(instance, window_surface, physical_device) {
             warn!("Skipping physical device (`{}`): {}", properties.device_name, error);
         } else {
             info!("Selected physical device (`{}`).", properties.device_name);
-            data.physical_device = physical_device;
-            return Ok(());
+            return Ok(physical_device);
         }
     }
 
     Err(anyhow!("Failed to find suitable physical device."))
 }
 
-pub unsafe fn destroy_physical_device(app: &App) {
-// Does nothing, since the physical device is destroyed when 
-// the instance is destroyed.
-}
-
 /// Check a physical device to see if supports everything we need
 unsafe fn check_physical_device(
     instance: &Instance,
-    data: &AppData,
+    window_surface: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
 ) -> Result<()> {
     let properties = instance.get_physical_device_properties(physical_device);
@@ -46,7 +39,7 @@ unsafe fn check_physical_device(
         return Err(anyhow!(SuitabilityError("Missing geometry shader support.")));
     }
 
-    QueueFamilyIndices::get(instance, data, physical_device)?;
+    QueueFamilyIndices::get(instance, window_surface, physical_device)?;
     check_physical_device_extensions(instance, physical_device)?;
 
     // let support = SwapchainSupport::get(instance, data, physical_device)?;

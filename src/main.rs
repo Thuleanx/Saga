@@ -5,11 +5,13 @@
     clippy::unnecessary_wraps
     )]
 
-mod vulkan;
 mod saga;
 mod core;
+mod datastructures;
+mod gameworld;
+mod ecs;
 
-use crate::vulkan::App;
+use crate::core::renderer::vulkan::App;
 
 use anyhow::Result;
 use saga::common_traits::GameObject;
@@ -41,6 +43,9 @@ fn main() -> Result<()> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
         // input handling
+        if destroying {
+            return;
+        }
         match event {
             Event::WindowEvent {
                 // Note this deeply nested pattern match

@@ -2,20 +2,19 @@ use anyhow::Result;
 use std::collections::HashSet;
 use vulkanalia::prelude::v1_0::*;
 
-use super::app::App;
-use super::appdata::AppData;
 use super::queue_families::QueueFamilyIndices;
 use super::validation_layers::*;
 
-use super::config::{DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION};
+use crate::core::config::{DEVICE_EXTENSIONS, PORTABILITY_MACOS_VERSION};
 
 pub unsafe fn create_logical_device(
     entry: &Entry,
     instance: &Instance,
-    data: &mut AppData,
-)-> Result<Device> {
+    window_surface: vk::SurfaceKHR,
+    physical_device: vk::PhysicalDevice,
+)-> Result<(Device, vk::Queue, vk::Queue)> {
 
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+    let indices = QueueFamilyIndices::get(instance, window_surface, physical_device)?;
 
     let mut unique_indices = HashSet::new();
     unique_indices.insert(indices.graphics);
@@ -51,15 +50,16 @@ pub unsafe fn create_logical_device(
         .enabled_extension_names(&extensions)
         .enabled_features(&features);
 
-    let device = instance.create_device(data.physical_device, &info, None)?;
+    let device = instance.create_device(physical_device, &info, None)?;
 
-    data.graphics_queue = device.get_device_queue(indices.graphics, 0);
-    data.present_queue = device.get_device_queue(indices.present, 0);
+    let graphics_queue = device.get_device_queue(indices.graphics, 0);
+    let present_queue = device.get_device_queue(indices.present, 0);
 
-    Ok(device)
+    Ok((device, graphics_queue, present_queue))
 }
 
 pub unsafe fn destroy_logical_device(
-    app: &App) {
-    app.device.destroy_device(None);
+    device: &Device) {
+
+    device.destroy_device(None);
 }

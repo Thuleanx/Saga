@@ -1,17 +1,14 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 
-use super::app::App;
-use super::appdata::AppData;
-
 pub unsafe fn create_render_pass(
     instance: &Instance,
     device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
+    swapchain_format: vk::Format,
+) -> Result<vk::RenderPass> {
 
     let color_attachment = vk::AttachmentDescription::builder()
-        .format(data.swapchain_format)
+        .format(swapchain_format)
         .samples(vk::SampleCountFlags::_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::STORE)
@@ -46,11 +43,10 @@ pub unsafe fn create_render_pass(
         .dependencies(dependencies);
 
 
-    data.render_pass = device.create_render_pass(&info, None)?;
-
-    Ok(())
+    let render_pass = device.create_render_pass(&info, None)?;
+    Ok(render_pass)
 }
 
-pub unsafe fn destroy_render_pass(app: &App) {
-    app.device.destroy_render_pass(app.data.render_pass, None);
+pub unsafe fn destroy_render_pass(device: &Device, render_pass: vk::RenderPass) {
+    device.destroy_render_pass(render_pass, None);
 }

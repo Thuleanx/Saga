@@ -1,7 +1,6 @@
 mod app;
 mod appdata;
 mod command_buffers;
-mod config;
 mod descriptor_set;
 mod errors;
 mod framebuffer;

@@ -1,7 +1,8 @@
-use cgmath::{vec3, One, Rotation, InnerSpace};
+use cgmath::{vec3, One, point3, Transform, Matrix};
 use super::{common_traits::{HasPosition, HasOrientation}, spectator::Spectator};
 
 type Vec3 = cgmath::Vector3<f32>;
+type Mat3 = cgmath::Matrix3<f32>;
 type Mat4 = cgmath::Matrix4<f32>;
 type Quat = cgmath::Quaternion<f32>;
 
@@ -32,25 +33,7 @@ pub trait Camera : HasPosition + HasOrientation {
             -self.get_position().x, -self.get_position().y, -self.get_position().z, 1.0
         );
 
-        let test_rotation = Quat::look_at(-vec3(2.0, 2.0, 2.0).normalize(), vec3(0.0, 1.0, 0.0));
-
-        println!("{:?} {:?} {:?}", right, up, look);
-        println!("{:?} {:?} {:?}", 
-                 test_rotation * vec3(1.0, 0.0, 0.0), 
-                 test_rotation * vec3(0.0, 1.0, 0.0), 
-                 test_rotation * vec3(0.0, 0.0, 1.0));
-
         rotation_matrix * translation_matrix 
-        // Matrix4::look_at_rh(point3(self.get_position().x, self.get_position().y, self.get_position().z), 
-        //                     point3(0.0, 0.0, 0.9), 
-        //                     vec3(0.0, 0.0, 1.0))
-        //
-
-        // Matrix4::look_at_rh(
-        //     point3(2.0, 2.0, 2.0), 
-        //     point3(0.0, 0.0, 0.9), 
-        //     vec3(0.0, 0.0, 1.0)
-        // )
     }
 }
 
@@ -82,11 +65,8 @@ impl PerspectiveCamera {
 impl Default for PerspectiveCamera {
     fn default() -> Self {
         Self {
-            position: vec3(2.0, 2.0, 2.0), 
-            rotation: Quat::from_arc(
-                vec3(0.0, 0.0, 1.0), 
-                vec3(0.0 - 2.0, 0.0 - 2.0, 0.9 - 2.0), 
-                None), 
+            position: vec3(0.0, 0.0, 0.0), 
+            rotation: Quat::one(),
             field_of_view: Default::default(), 
             far_plane_distance: Default::default(), 
             near_plane_distance: Default::default(), 
@@ -176,12 +156,11 @@ impl Default for PerspectiveCameraBuilder {
         Self { 
             position: vec3(2.0, 2.0, 2.0), 
             rotation: 
-                Quat::from_arc(
-                    vec3(0.0, 0.0, 1.0), 
-                    vec3(0.0 - 2.0, 0.0 - 2.0, 0.0 - 2.0), 
-                None),
-                // Quat::look_at(vec3(1.0, 1.0, 1.0).normalize(), vec3(0.0, 1.0, 0.0)),
-                // Quat::look_at(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0)),
+                Mat3::look_at_rh(
+                    point3(0.0, 0.0, 0.0),
+                    point3(2.0, 2.0, 1.1), 
+                    vec3(0.0, 0.0, 1.0),
+                ).transpose().into(),
             field_of_view: (45.0 as f32).to_radians(), 
             far_plane_distance: 10.0, 
             near_plane_distance: 0.1, 
