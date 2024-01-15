@@ -7,6 +7,8 @@ use vulkanalia::vk::{KhrSwapchainExtension, Fence};
 use crate::saga::PerspectiveCameraBuilder;
 
 use super::appdata::AppData;
+use super::pipeline::{VERTICES, INDICES};
+use super::wrappers::{VertexBuffer, IndexBuffer};
 
 use crate::core::config::MAX_FRAMES_IN_FLIGHT;
 use std::time::Instant;
@@ -23,8 +25,8 @@ use super::{
     sync_objects,
     validation_layers,
     window_surface, 
-    vertex, 
-    uniform_buffer_object, descriptor_set,
+    uniform_buffer_object, 
+    descriptor_set,
 };
 
 /// Our Vulkan app.
@@ -93,12 +95,23 @@ impl App {
             data.physical_device,
         )?;
 
-        (data.vertex_buffer, data.vertex_buffer_memory) = 
-            vertex::create_vertex_buffer(&instance, &device, data.physical_device, 
-                                         data.command_pool, data.graphics_queue)?;
-        (data.index_buffer, data.index_buffer_memory) =
-            vertex::create_index_buffer(&instance, &device, data.physical_device, 
-                                        data.command_pool, data.graphics_queue)?;
+        data.vertex_buffer = VertexBuffer::create(
+            &instance,
+            &device,
+            data.physical_device,
+            data.command_pool,
+            data.graphics_queue,
+            &VERTICES
+        )?;
+
+        data.index_buffer = IndexBuffer::create(
+            &instance,
+            &device,
+            data.physical_device,
+            data.command_pool,
+            data.graphics_queue,
+            &INDICES
+        )?;
 
         uniform_buffer_object::create_uniform_buffers(&instance, &device, data.physical_device,
             &mut data.uniform_buffers, &mut data.uniform_buffers_memory, &data.swapchain_images)?;
@@ -216,12 +229,8 @@ impl App {
         uniform_buffer_object::destroy_descriptor_set_layout(
             &self.device, self.data.descriptor_set_layout);
 
-        vertex::destroy_buffer_and_free_memory(&self.device, 
-                                               self.data.vertex_buffer, 
-                                               self.data.vertex_buffer_memory);
-        vertex::destroy_buffer_and_free_memory(&self.device, 
-                                               self.data.index_buffer, 
-                                               self.data.index_buffer_memory);
+        VertexBuffer::destroy(&self.data.vertex_buffer, &self.device);
+        IndexBuffer::unload(&self.data.index_buffer, &self.device);
 
         sync_objects::destroy_semaphores(&self.device, &self.data.render_finished_semaphores);
         sync_objects::destroy_semaphores(&self.device, &self.data.image_available_semaphores);

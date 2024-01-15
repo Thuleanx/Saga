@@ -2,8 +2,7 @@ use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 use cgmath::{vec2, vec3};
 
-use super::shader;
-use super::vertex::Vertex;
+use super::{shader, wrappers::Vertex};
 
 pub static VERTICES: [Vertex; 4] = [
     Vertex::new(vec2(-0.5, -0.5), vec3(1.0, 0.0, 0.0)),

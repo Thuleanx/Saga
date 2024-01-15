@@ -6,6 +6,8 @@ use cgmath::{Matrix4, Deg, vec3};
 use crate::saga::Camera;
 
 use std::ptr::copy_nonoverlapping as memcpy;
+
+use super::buffers;
 type Mat4 = cgmath::Matrix4<f32>;
 
 #[repr(C)]
@@ -43,13 +45,12 @@ pub unsafe fn create_uniform_buffers(
     uniform_buffers_memory: &mut Vec<vk::DeviceMemory>,
     swapchain_images: &Vec<vk::Image>,
 ) -> Result<()> {
-    use super::vertex;
 
     uniform_buffers.clear();
     uniform_buffers_memory.clear();
 
     for _ in 0..swapchain_images.len() {
-        let (uniform_buffer, uniform_buffer_memory) = vertex::create_buffer(
+        let (uniform_buffer, uniform_buffer_memory) = buffers::create_buffer(
             instance,
             device,
             physical_device,

@@ -2,6 +2,8 @@
 use vulkanalia::prelude::v1_0::*;
 use crate::saga::{PerspectiveCamera, input::Input};
 
+use super::wrappers::{VertexBuffer, IndexBuffer};
+
 /// The Vulkan handles and associated properties used by our Vulkan app.
 #[derive(Clone, Debug, Default)]
 pub struct AppData {
@@ -26,10 +28,8 @@ pub struct AppData {
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
     pub images_in_flight: Vec<vk::Fence>,
-    pub vertex_buffer: vk::Buffer,
-    pub vertex_buffer_memory: vk::DeviceMemory,
-    pub index_buffer: vk::Buffer,
-    pub index_buffer_memory: vk::DeviceMemory,
+    pub vertex_buffer: VertexBuffer,
+    pub index_buffer: IndexBuffer,
     pub uniform_buffers: Vec<vk::Buffer>,
     pub uniform_buffers_memory: Vec<vk::DeviceMemory>,
     pub descriptor_pool : vk::DescriptorPool,

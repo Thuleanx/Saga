@@ -1,6 +1,8 @@
 mod app;
 mod appdata;
+mod buffers;
 mod command_buffers;
+mod descriptor;
 mod descriptor_set;
 mod errors;
 mod framebuffer;
@@ -15,7 +17,8 @@ mod swapchain;
 mod sync_objects;
 mod uniform_buffer_object;
 mod validation_layers;
-mod vertex;
 mod window_surface;
+mod wrappers;
 
 pub use self::app::App;
+

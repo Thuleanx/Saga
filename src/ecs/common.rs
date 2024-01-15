@@ -1,6 +1,4 @@
-use std::{any::TypeId, collections::HashMap};
-
-use type_map::TypeMap;
+// use std::{any::TypeId, collections::HashMap};
 
 struct Entity(u64);
 
@@ -10,7 +8,6 @@ struct World {
 
 struct Archetype {
     entities: Vec<Entity>,
-    component_containers: TypeMap, // typeid -> ComponentContainer<T>
 }
 
 struct ComponentContainer<T> {

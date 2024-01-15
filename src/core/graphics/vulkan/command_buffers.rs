@@ -3,6 +3,7 @@ use vulkanalia::prelude::v1_0::*;
 
 use super::pipeline::INDICES;
 use super::queue_families::QueueFamilyIndices;
+use super::wrappers::{VertexBuffer, IndexBuffer};
 
 pub unsafe fn create_command_buffers(
     device: &Device,
@@ -12,8 +13,8 @@ pub unsafe fn create_command_buffers(
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     framebuffers: &Vec<vk::Framebuffer>,
-    vertex_buffer: vk::Buffer,
-    index_buffer: vk::Buffer,
+    vertex_buffer: VertexBuffer,
+    index_buffer: IndexBuffer,
     descriptor_sets: &Vec<vk::DescriptorSet>,
 ) -> Result<Vec<vk::CommandBuffer>> {
     // Allocate
@@ -55,9 +56,9 @@ pub unsafe fn create_command_buffers(
         // Bind Vertex buffer
         {
             let first_binding = 0;
-            let memory_offsets = [0];
-            device.cmd_bind_vertex_buffers(*command_buffer, first_binding, &[vertex_buffer], &memory_offsets);
-            device.cmd_bind_index_buffer(*command_buffer, index_buffer, memory_offsets[0], vk::IndexType::UINT16);
+            let memory_offset = 0;
+            vertex_buffer.bind(&device, *command_buffer, first_binding, memory_offset);
+            index_buffer.bind(device, *command_buffer, memory_offset);
         }
 
         // Bind Descriptor Set
