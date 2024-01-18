@@ -1,11 +1,12 @@
 // Instance
 use vulkanalia::prelude::v1_0::*;
 use crate::saga::{PerspectiveCamera, input::Input};
+use super::descriptor::Pool;
 
-use super::wrappers::{VertexBuffer, IndexBuffer};
+use super::wrappers::{VertexBuffer, IndexBuffer, UniformBufferSeries};
 
 /// The Vulkan handles and associated properties used by our Vulkan app.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct AppData {
     pub messenger: vk::DebugUtilsMessengerEXT,
     pub physical_device: vk::PhysicalDevice,
@@ -30,9 +31,8 @@ pub struct AppData {
     pub images_in_flight: Vec<vk::Fence>,
     pub vertex_buffer: VertexBuffer,
     pub index_buffer: IndexBuffer,
-    pub uniform_buffers: Vec<vk::Buffer>,
-    pub uniform_buffers_memory: Vec<vk::DeviceMemory>,
-    pub descriptor_pool : vk::DescriptorPool,
+    pub uniform_buffer_series: UniformBufferSeries,
+    pub descriptor_pool : Pool,
     pub descriptor_sets : Vec<vk::DescriptorSet>,
     pub camera: PerspectiveCamera,
     pub input: Input,

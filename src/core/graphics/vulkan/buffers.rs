@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use std::mem::size_of;
 use vulkanalia::vk::{self};
 use vulkanalia::prelude::v1_0::*;
 

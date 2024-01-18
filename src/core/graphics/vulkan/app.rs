@@ -4,11 +4,11 @@ use vulkanalia::prelude::v1_0::*;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use winit::window::Window;
 use vulkanalia::vk::{KhrSwapchainExtension, Fence};
-use crate::saga::PerspectiveCameraBuilder;
+use crate::saga::{PerspectiveCameraBuilder, Camera};
 
 use super::appdata::AppData;
 use super::pipeline::{VERTICES, INDICES};
-use super::wrappers::{VertexBuffer, IndexBuffer};
+use super::wrappers::{VertexBuffer, IndexBuffer, uniform_buffer};
 
 use crate::core::config::MAX_FRAMES_IN_FLIGHT;
 use std::time::Instant;
@@ -25,12 +25,22 @@ use super::{
     sync_objects,
     validation_layers,
     window_surface, 
-    uniform_buffer_object, 
-    descriptor_set,
+    descriptor,
 };
 
+use cgmath::{Matrix4, Deg, vec3};
+type Mat4 = cgmath::Matrix4<f32>;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct UniformBufferObject {
+    pub model: Mat4,
+    pub  view: Mat4,
+    pub proj: Mat4,
+}
+
 /// Our Vulkan app.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct App {
     pub entry: Entry,
     pub instance: Instance,
@@ -76,7 +86,13 @@ impl App {
 
         data.render_pass = renderpass::create_render_pass(&instance, &device, data.swapchain_format)?;
 
-        data.descriptor_set_layout = uniform_buffer_object::create_descriptor_set_layout(&device)?;
+        data.descriptor_set_layout = descriptor::layout::create(
+            &device, 
+            0, 
+            vk::DescriptorType::UNIFORM_BUFFER,
+            1,
+            vk::ShaderStageFlags::VERTEX
+        )?;
 
         (data.pipeline_layout, data.pipeline) = 
             pipeline::create_pipeline(&device, data.swapchain_extent, data.descriptor_set_layout, data.render_pass)?;
@@ -113,16 +129,25 @@ impl App {
             &INDICES
         )?;
 
-        uniform_buffer_object::create_uniform_buffers(&instance, &device, data.physical_device,
-            &mut data.uniform_buffers, &mut data.uniform_buffers_memory, &data.swapchain_images)?;
+        data.uniform_buffer_series = uniform_buffer::create_series::<UniformBufferObject>(
+            &instance, 
+            &device, 
+            data.physical_device,
+            data.swapchain_images.len() as u32
+        )?;
 
-        data.descriptor_pool = descriptor_set::create_descriptor_pool(
-            &device, data.swapchain_images.len() as u32)?;
+        data.descriptor_pool = descriptor::pool::create(
+            &device, 
+            vk::DescriptorType::UNIFORM_BUFFER, 
+            data.swapchain_images.len() as u32
+        )?;
 
-        data.descriptor_sets = descriptor_set::create_descriptor_sets(
-            &device, data.descriptor_set_layout, 
-            data.descriptor_pool, data.swapchain_images.len(), 
-            &data.uniform_buffers, &data.descriptor_sets)?;
+        data.descriptor_sets = descriptor::set::create::<UniformBufferObject>(
+            &device,
+            &data.descriptor_pool, 
+            data.descriptor_set_layout,
+            &data.uniform_buffer_series.get_buffers()
+        )?;
 
         data.command_buffers = command_buffers::create_command_buffers(
             &device, 
@@ -171,13 +196,29 @@ impl App {
 
         self.data.images_in_flight[image_index] = in_flight_fence;
 
-        uniform_buffer_object::update_uniform_buffer(
-            &self.device,
-            image_index, 
-            self.start,
-            &mut self.data.uniform_buffers_memory, 
-            &self.data.camera
-        )?;
+        { // update uniform buffer object
+            let time = self.start.elapsed().as_secs_f32();
+
+            let model = Matrix4::from_axis_angle(
+                vec3(0.0, 0.0, 1.0), 
+                Deg(90.0) * time
+            );
+
+            let view = self.data.camera.get_cached_view_matrix();
+            let proj = self.data.camera.get_cached_projection_matrix();
+            
+            let ubo = UniformBufferObject { model, view, proj };
+
+            let memory = self.data.uniform_buffer_series.get_memory_at_index(image_index);
+
+            if let Some(memory) = memory {
+                uniform_buffer::update_uniform_buffer::<UniformBufferObject>(
+                    &self.device, 
+                    &ubo, 
+                    memory
+                )?;
+            }
+        }
 
         let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
@@ -226,8 +267,7 @@ impl App {
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) {
         self.destroy_swapchain();
-        uniform_buffer_object::destroy_descriptor_set_layout(
-            &self.device, self.data.descriptor_set_layout);
+        descriptor::layout::destroy(&self.device, self.data.descriptor_set_layout);
 
         VertexBuffer::destroy(&self.data.vertex_buffer, &self.device);
         IndexBuffer::unload(&self.data.index_buffer, &self.device);
@@ -268,22 +308,19 @@ impl App {
             self.data.swapchain_extent
         )?;
 
-        uniform_buffer_object::create_uniform_buffers(
-            &self.instance, 
-            &self.device,
-            self.data.physical_device,
-            &mut self.data.uniform_buffers, 
-            &mut self.data.uniform_buffers_memory, 
-            &self.data.swapchain_images
+        self.data.descriptor_pool = descriptor::pool::create(
+            &self.device, 
+            vk::DescriptorType::UNIFORM_BUFFER, 
+            self.data.swapchain_images.len() as u32
         )?;
 
-        self.data.descriptor_pool = descriptor_set::create_descriptor_pool(
-            &self.device, self.data.swapchain_images.len() as u32)?;
+        self.data.descriptor_sets = descriptor::set::create::<UniformBufferObject>(
+            &self.device,
+            &self.data.descriptor_pool, 
+            self.data.descriptor_set_layout,
+            &self.data.uniform_buffer_series.get_buffers()
+        )?;
 
-        self.data.descriptor_sets = descriptor_set::create_descriptor_sets(
-            &self.device, self.data.descriptor_set_layout, 
-            self.data.descriptor_pool, self.data.swapchain_images.len(), 
-            &self.data.uniform_buffers, &self.data.descriptor_sets)?;
 
         self.data.command_buffers = command_buffers::create_command_buffers(
             &self.device, 
@@ -302,10 +339,8 @@ impl App {
     unsafe fn destroy_swapchain(&mut self) {
         self.device.free_command_buffers(self.data.command_pool, &self.data.command_buffers);
 
-        uniform_buffer_object::destroy_uniform_buffers(&self.device, &mut self.data.uniform_buffers);
-        uniform_buffer_object::destroy_uniform_buffers_memory(&self.device, &mut self.data.uniform_buffers_memory);
-
-        descriptor_set::destroy_descriptor_pool(&self.device, self.data.descriptor_pool);
+        uniform_buffer::destroy_series(&self.device, &self.data.uniform_buffer_series);
+        descriptor::pool::destroy(&self.device, &self.data.descriptor_pool);
 
         self.data.framebuffers
             .iter()

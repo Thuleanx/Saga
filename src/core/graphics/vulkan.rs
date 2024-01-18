@@ -3,7 +3,6 @@ mod appdata;
 mod buffers;
 mod command_buffers;
 mod descriptor;
-mod descriptor_set;
 mod errors;
 mod framebuffer;
 mod instance;

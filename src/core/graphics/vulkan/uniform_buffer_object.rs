@@ -88,7 +88,7 @@ pub unsafe fn update_uniform_buffer(
     device: &Device, 
     image_index: usize, 
     start_time: Instant,
-    uniform_buffers_memory: &mut Vec<vk::DeviceMemory>,
+    uniform_buffers_memory: &Vec<vk::DeviceMemory>,
     camera: &dyn Camera,
 ) -> Result<()> {
     let time = start_time.elapsed().as_secs_f32();
