@@ -6,7 +6,7 @@ use super::descriptor::Pool;
 use super::wrappers::{VertexBuffer, IndexBuffer, UniformBufferSeries};
 
 /// The Vulkan handles and associated properties used by our Vulkan app.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct AppData {
     pub messenger: vk::DebugUtilsMessengerEXT,
     pub physical_device: vk::PhysicalDevice,

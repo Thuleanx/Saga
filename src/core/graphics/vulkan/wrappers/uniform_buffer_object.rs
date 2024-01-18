@@ -8,7 +8,7 @@ pub mod uniform_buffer {
     use crate::core::graphics::vulkan::buffers;
     use std::ptr::copy_nonoverlapping as memcpy;
 
-    #[derive(Debug, Default)]
+    #[derive(Clone, Debug, Default)]
     pub struct UniformBufferSeries {
         buffers: Vec<vk::Buffer>,
         buffer_memories: Vec<vk::DeviceMemory>,
@@ -37,7 +37,7 @@ pub mod uniform_buffer {
         instance: &Instance,
         device: &Device,
         physical_device: vk::PhysicalDevice,
-        number_of_buffers : u32,
+        number_of_buffers : usize,
     ) -> Result<UniformBufferSeries> {
         let size_of_one_buffer = size_of::<T>() as u64;
 
@@ -54,7 +54,7 @@ pub mod uniform_buffer {
         instance: &Instance,
         device: &Device,
         physical_device: vk::PhysicalDevice,
-        number_of_buffers : u32,
+        number_of_buffers : usize,
         size_of_one_buffer: u64,
     ) -> Result<UniformBufferSeries> {
 
@@ -68,7 +68,8 @@ pub mod uniform_buffer {
                 physical_device,
                 size_of_one_buffer,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
-                vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                vk::MemoryPropertyFlags::HOST_COHERENT | 
+                vk::MemoryPropertyFlags::HOST_VISIBLE,
             )?;
 
             uniform_buffers.push(uniform_buffer);
@@ -91,6 +92,24 @@ pub mod uniform_buffer {
             .for_each(|b| device.free_memory(*b, None));
     }
 
+    pub unsafe fn update_uniform_buffer_series<T>(
+        device: &Device,
+        uniform_buffer_object: &T,
+        uniform_buffer_series: &UniformBufferSeries,
+        memory_index: usize,
+    ) -> Result<()> {
+
+        if let Some(memory) = uniform_buffer_series.get_memory_at_index(memory_index) {
+            update_uniform_buffer(
+                device, 
+                uniform_buffer_object, 
+                memory
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub unsafe fn update_uniform_buffer<T>(
         device: &Device,
         uniform_buffer_object: &T,
@@ -104,7 +123,7 @@ pub mod uniform_buffer {
             vk::MemoryMapFlags::empty()
         )?;
 
-        memcpy(&uniform_buffer_object, memory.cast(), 1);
+        memcpy(uniform_buffer_object, memory.cast(), 1);
 
         device.unmap_memory(uniform_buffer_memory);
 

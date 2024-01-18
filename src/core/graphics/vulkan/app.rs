@@ -24,7 +24,7 @@ use super::{
     swapchain,
     sync_objects,
     validation_layers,
-    window_surface, 
+    window_surface,
     descriptor,
 };
 
@@ -40,7 +40,7 @@ pub struct UniformBufferObject {
 }
 
 /// Our Vulkan app.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct App {
     pub entry: Entry,
     pub instance: Instance,
@@ -132,8 +132,8 @@ impl App {
         data.uniform_buffer_series = uniform_buffer::create_series::<UniformBufferObject>(
             &instance, 
             &device, 
-            data.physical_device,
-            data.swapchain_images.len() as u32
+            data.physical_device, 
+            data.swapchain_images.len(),
         )?;
 
         data.descriptor_pool = descriptor::pool::create(
@@ -146,7 +146,7 @@ impl App {
             &device,
             &data.descriptor_pool, 
             data.descriptor_set_layout,
-            &data.uniform_buffer_series.get_buffers()
+            &data.uniform_buffer_series.get_buffers(),
         )?;
 
         data.command_buffers = command_buffers::create_command_buffers(
@@ -209,15 +209,11 @@ impl App {
             
             let ubo = UniformBufferObject { model, view, proj };
 
-            let memory = self.data.uniform_buffer_series.get_memory_at_index(image_index);
-
-            if let Some(memory) = memory {
-                uniform_buffer::update_uniform_buffer::<UniformBufferObject>(
-                    &self.device, 
-                    &ubo, 
-                    memory
-                )?;
-            }
+            uniform_buffer::update_uniform_buffer_series(
+                &self.device, 
+                &ubo, &self.data.uniform_buffer_series, 
+                image_index
+            )?;
         }
 
         let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
@@ -308,6 +304,13 @@ impl App {
             self.data.swapchain_extent
         )?;
 
+        self.data.uniform_buffer_series = uniform_buffer::create_series::<UniformBufferObject>(
+            &self.instance, 
+            &self.device, 
+            self.data.physical_device, 
+            self.data.swapchain_images.len(),
+        )?;
+
         self.data.descriptor_pool = descriptor::pool::create(
             &self.device, 
             vk::DescriptorType::UNIFORM_BUFFER, 
@@ -340,6 +343,7 @@ impl App {
         self.device.free_command_buffers(self.data.command_pool, &self.data.command_buffers);
 
         uniform_buffer::destroy_series(&self.device, &self.data.uniform_buffer_series);
+
         descriptor::pool::destroy(&self.device, &self.data.descriptor_pool);
 
         self.data.framebuffers
