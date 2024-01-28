@@ -3,8 +3,51 @@ use vulkanalia::prelude::v1_0::*;
 use vulkanalia::vk::KhrSurfaceExtension;
 use vulkanalia::vk::KhrSwapchainExtension;
 use winit::window::Window;
+use log::*;
 
 use super::queue_families::QueueFamilyIndices;
+
+pub struct Swapchain {
+    chain: vk::SwapchainKHR,
+    format: vk::Format,
+    extent: vk::Extent2D,
+    images: Vec<vk::Image>,
+    image_views: Vec<vk::ImageView>,
+    destroyed: bool, // marked true when swapchain is destroyed.
+}
+
+impl Swapchain {
+    unsafe fn new(window: &Window, instance: &Instance, device: &Device, 
+              surface: vk::SurfaceKHR, physical_device: vk::PhysicalDevice
+    ) -> Result<Self> {
+        let (swapchain, swapchain_images, swapchain_format, swapchain_extent)
+            = create_swapchain(window, &instance, &device, surface, physical_device)?;
+        let swapchain_image_views = create_swapchain_image_views(
+            device, &swapchain_images, swapchain_format)?;
+        Ok(Self { 
+            chain: swapchain, 
+            format: swapchain_format, 
+            extent: swapchain_extent, 
+            images: swapchain_images, 
+            image_views: swapchain_image_views,
+            destroyed: false,
+        })
+    }
+
+    unsafe fn destroy(&self, device: &Device) {
+        destroy_swapchain_and_image_views(
+            device, self.chain, &self.image_views);
+    }
+
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        if !self.destroyed {
+            error!("swapchain dropped before properly destroyed. Call ");
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct SwapchainSupport {
@@ -160,7 +203,7 @@ pub unsafe fn create_swapchain_image_views(
 }
 
 pub unsafe fn destroy_swapchain_and_image_views(device: &Device, 
-        swapchain: vk::SwapchainKHR, swapchain_image_views: Vec<vk::ImageView>) {
+        swapchain: vk::SwapchainKHR, swapchain_image_views: &[vk::ImageView]) {
     swapchain_image_views
         .iter()
         .for_each(|v| device.destroy_image_view(*v, None));

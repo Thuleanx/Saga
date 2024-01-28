@@ -3,14 +3,27 @@
  * Vulkan rendering core subsystem
  *
  */
-pub mod vulkan;
-mod mesh;
-mod material;
 
-mod grahics {
-    struct Graphics {
-    }
+mod app;
+mod appdata;
+mod buffers;
+mod command_buffers;
+mod descriptor;
+mod errors;
+mod framebuffer;
+mod instance;
+mod logical_device;
+mod physical_device;
+mod pipeline;
+mod queue_families;
+mod renderpass;
+mod shader;
+mod swapchain;
+mod sync_objects;
+mod validation_layers;
+mod window_surface;
+mod wrappers;
+pub mod graphics;
 
-    impl Graphics {
-    }
-}
+pub use self::app::App;
+

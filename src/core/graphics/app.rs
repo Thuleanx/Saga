@@ -265,8 +265,8 @@ impl App {
         self.destroy_swapchain();
         descriptor::layout::destroy(&self.device, self.data.descriptor_set_layout);
 
-        VertexBuffer::destroy(&self.data.vertex_buffer, &self.device);
-        IndexBuffer::unload(&self.data.index_buffer, &self.device);
+        VertexBuffer::destroy(self.data.vertex_buffer, &self.device);
+        IndexBuffer::destroy(self.data.index_buffer, &self.device);
 
         sync_objects::destroy_semaphores(&self.device, &self.data.render_finished_semaphores);
         sync_objects::destroy_semaphores(&self.device, &self.data.image_available_semaphores);

@@ -11,7 +11,7 @@ mod datastructures;
 mod gameworld;
 mod ecs;
 
-use crate::core::graphics::vulkan::App;
+use crate::core::graphics::App;
 
 use anyhow::Result;
 use saga::common_traits::GameObject;

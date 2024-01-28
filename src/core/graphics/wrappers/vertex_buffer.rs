@@ -5,14 +5,13 @@ use vulkanalia::prelude::v1_0::*;
 
 use super::super::buffers::{create_buffer, copy_buffer};
 
-type Vec2 = cgmath::Vector2<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
-    pos: Vec2,
-    color: Vec3,
+    pos: Vec3,
+    // color: Vec3,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -22,8 +21,14 @@ pub struct VertexBuffer {
 }
 
 impl Vertex {
-    pub const fn new(pos: Vec2, color: Vec3) -> Self {
-        Self {pos, color}
+    pub const fn new(
+        pos: Vec3, 
+        // color: Vec3,
+    ) -> Self {
+        Self {
+            pos, 
+            // color
+        }
     }
 
     pub fn binding_description() -> vk::VertexInputBindingDescription {
@@ -34,25 +39,26 @@ impl Vertex {
             .build()
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 1] {
         let pos = vk::VertexInputAttributeDescription::builder()
             .binding(0)
             .location(0)
-            .format(vk::Format::R32G32_SFLOAT)
+            .format(vk::Format::R32G32B32_SFLOAT)
             .offset(0)
             .build();
-        let color = vk::VertexInputAttributeDescription::builder()
-            .binding(0)
-            .location(1)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(size_of::<Vec2>() as u32)
-            .build();
-        [pos, color]
+        // let color = vk::VertexInputAttributeDescription::builder()
+        //     .binding(0)
+        //     .location(1)
+        //     .format(vk::Format::R32G32B32_SFLOAT)
+        //     .offset(size_of::<Vec3>() as u32)
+        //     .build();
+        // [pos, color]
+        [pos]
     }
 }
 
 impl VertexBuffer {
-    pub(in crate::core::graphics::vulkan) unsafe fn create(
+    pub(in crate::core::graphics) unsafe fn create(
         instance: &Instance, 
         device: &Device,
         physical_device: vk::PhysicalDevice,
@@ -100,7 +106,7 @@ impl VertexBuffer {
         })
     }
 
-    pub unsafe fn destroy(buffer: &VertexBuffer, device: &Device) {
+    pub unsafe fn destroy(buffer: VertexBuffer, device: &Device) {
         device.destroy_buffer(buffer.buffer, None);
         device.free_memory(buffer.memory, None);
     }

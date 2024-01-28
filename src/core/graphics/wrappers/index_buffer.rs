@@ -3,7 +3,7 @@ use std::mem::size_of;
 use vulkanalia::vk::{self};
 use vulkanalia::prelude::v1_0::*;
 
-use crate::core::graphics::vulkan::buffers::{create_buffer, copy_buffer};
+use super::super::buffers::{create_buffer, copy_buffer};
 
 pub struct Index(u16);
 
@@ -63,7 +63,7 @@ impl IndexBuffer {
         })
     }
 
-    pub unsafe fn unload(buffer: &IndexBuffer, device: &Device) {
+    pub unsafe fn destroy(buffer: IndexBuffer, device: &Device) {
         device.destroy_buffer(buffer.buffer, None);
         device.free_memory(buffer.memory, None);
     }
