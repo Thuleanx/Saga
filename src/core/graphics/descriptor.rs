@@ -4,24 +4,30 @@ pub mod layout {
     use anyhow::Result;
     use vulkanalia::prelude::v1_0::*;
 
+    pub struct UBODescription {
+        pub binding: u32,
+        pub descriptor_type: vk::DescriptorType,
+        pub descriptor_count: u32,
+        pub stage_flags: vk::ShaderStageFlags,
+    }
+
     pub unsafe fn create(
         device: &Device,
-        binding: u32,
-        descriptor_type: vk::DescriptorType,
-        descriptor_count: u32,
-        stage_flags: vk::ShaderStageFlags,
-
+        ubo_specs: &[UBODescription],
     ) -> Result<vk::DescriptorSetLayout> {
+        let ubo_bindings : Vec<vk::DescriptorSetLayoutBindingBuilder<'_>>
+            = ubo_specs
+            .iter()
+            .map(|spec| {
+                vk::DescriptorSetLayoutBinding::builder()
+                    .binding(spec.binding)
+                    .descriptor_type(spec.descriptor_type)
+                    .descriptor_count(spec.descriptor_count)
+                    .stage_flags(spec.stage_flags)
+            }).collect();
 
-        let ubo_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(binding)
-            .descriptor_type(descriptor_type)
-            .descriptor_count(descriptor_count)
-            .stage_flags(stage_flags);
-
-        let ubo_bindings = &[ubo_binding];
         let info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(ubo_bindings);
+            .bindings(&ubo_bindings);
 
         let descriptor_set_layout = device.create_descriptor_set_layout(&info, None)?;
 
@@ -68,7 +74,8 @@ pub mod pool {
         let pool_create_info: vk::DescriptorPoolCreateInfoBuilder<'_> 
             = vk::DescriptorPoolCreateInfo::builder()
             .pool_sizes(pool_size)
-            .max_sets(descriptor_count);
+            .max_sets(descriptor_count)
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
 
         let descriptor_pool = device.create_descriptor_pool(&pool_create_info, None)?;
 
@@ -131,7 +138,6 @@ pub mod set {
                 .offset(0)
                 .range(size_of_buffer_object);
 
-
             let buffer_info = &[info];
             let ubo_write = vk::WriteDescriptorSet::builder()
                 .dst_set(descriptor_sets[i])
@@ -145,5 +151,9 @@ pub mod set {
 
 
         Ok(descriptor_sets)
+    }
+
+    pub unsafe fn free(device: &Device, pool: Pool, descriptor_sets: &[vk::DescriptorSet]) -> Result<()> {
+        Ok(device.free_descriptor_sets(pool.get_pool(), descriptor_sets)?)
     }
 }

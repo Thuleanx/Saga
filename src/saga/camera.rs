@@ -1,12 +1,25 @@
-use cgmath::{vec3, One, point3, Transform, Matrix};
-use super::{common_traits::{HasPosition, HasOrientation}, spectator::Spectator};
+use anyhow::Result;
+use cgmath::{vec3, One, point3, Transform, Matrix, Matrix4, Deg};
+use crate::core::graphics::{UniformBufferSeries, Graphics};
+
+use super::{common_traits::{HasPosition, HasRotation}, spectator::Spectator};
+
+use vulkanalia::prelude::v1_0::*;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct UniformBufferObject {
+    pub model: Mat4,
+    pub  view: Mat4,
+    pub proj: Mat4,
+}
 
 type Vec3 = cgmath::Vector3<f32>;
 type Mat3 = cgmath::Matrix3<f32>;
 type Mat4 = cgmath::Matrix4<f32>;
 type Quat = cgmath::Quaternion<f32>;
 
-pub trait Camera : HasPosition + HasOrientation {
+pub trait Camera : HasPosition + HasRotation {
     fn get_cached_projection_matrix(&self) -> Mat4;
     fn get_cached_view_matrix(&self) -> Mat4;
 
@@ -48,6 +61,8 @@ pub struct PerspectiveCamera {
     height: u32,
     view: Mat4,
     projection: Mat4,
+    uniform_buffers: UniformBufferSeries,
+    descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 impl PerspectiveCamera {
@@ -59,6 +74,59 @@ impl PerspectiveCamera {
     pub fn set_height(&mut self, height: u32) -> () {
         self.height = height;
         self.projection = self.calculate_projection_matrix();
+    }
+
+    pub unsafe fn bind(&self, graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize) {
+        graphics.bind_descriptor_set(command_buffer, self.descriptor_sets[index])
+    }
+
+    pub unsafe fn before_swapchain_recreate(&mut self, graphics: &Graphics) -> Result<()> {
+        graphics.destroy_uniform_buffer_series(&self.uniform_buffers); 
+        graphics.free_descriptor_sets(&self.descriptor_sets)?;
+
+        Ok(())
+    }
+
+    pub unsafe fn after_swapchain_recreate(&mut self, graphics: &Graphics) -> Result<()> {
+        self.uniform_buffers = unsafe {
+            graphics.create_uniform_buffer_series::<UniformBufferObject>()?
+        };
+
+        self.descriptor_sets = unsafe {
+            graphics.create_descriptor_sets::<UniformBufferObject>(&self.uniform_buffers)?
+        };
+
+        Ok(())
+    }
+
+    pub unsafe fn update_uniform_buffer_series(&self, graphics: &Graphics, image_index: usize) -> Result<()> {
+
+        let time = graphics.get_start_time().elapsed().as_secs_f32();
+
+        let model = 
+        Matrix4::from_axis_angle(
+            vec3(0.0, 0.0, 1.0), 
+            Deg(90.0 * time)
+        ) *
+        Matrix4::from_axis_angle(
+            vec3(1.0, 0.0, 0.0), 
+            Deg(90.0)
+        );
+
+        let view = self.get_cached_view_matrix();
+        let proj = self.get_cached_projection_matrix();
+
+        let ubo = UniformBufferObject { model, view, proj };
+
+        graphics.update_uniform_buffer_series(&self.uniform_buffers, image_index, &ubo)
+    }
+
+    pub unsafe fn unload(&self, graphics: &Graphics) -> Result<()> {
+        unsafe { 
+            graphics.destroy_uniform_buffer_series(&self.uniform_buffers);
+            graphics.free_descriptor_sets(&self.descriptor_sets)?;
+        }
+        Ok(())
     }
 }
 
@@ -74,6 +142,8 @@ impl Default for PerspectiveCamera {
             height: Default::default(), 
             view: Mat4::one(), 
             projection: Mat4::one(),
+            uniform_buffers: UniformBufferSeries::default(),
+            descriptor_sets: vec![],
         }
     }
 }
@@ -131,7 +201,15 @@ impl PerspectiveCameraBuilder {
         self
     }
 
-    pub fn build(&self) -> PerspectiveCamera {
+    pub fn build(&self, graphics: &Graphics) -> Result<PerspectiveCamera> {
+        let uniform_buffers = unsafe {
+            graphics.create_uniform_buffer_series::<UniformBufferObject>()?
+        };
+
+        let descriptor_sets : Vec<vk::DescriptorSet> = unsafe {
+            graphics.create_descriptor_sets::<UniformBufferObject>(&uniform_buffers)?
+        };
+
         let mut builder_result = PerspectiveCamera { 
             position: self.position, 
             rotation: self.rotation, 
@@ -142,19 +220,21 @@ impl PerspectiveCameraBuilder {
             height: self.height, 
             view: Mat4::one(), 
             projection: Mat4::one(),
+            uniform_buffers,
+            descriptor_sets,
         };
 
         builder_result.view = builder_result.calculate_view_matrix();
         builder_result.projection = builder_result.calculate_projection_matrix();
 
-        builder_result
+        Ok(builder_result)
     }
 }
 
 impl Default for PerspectiveCameraBuilder {
     fn default() -> Self {
         Self { 
-            position: vec3(2.0, 2.0, 2.0), 
+            position: vec3(4.0, 4.0, 4.0), 
             rotation: 
                 Mat3::look_at_rh(
                     point3(0.0, 0.0, 0.0),
@@ -178,7 +258,7 @@ impl HasPosition for PerspectiveCamera {
     }
 }
 
-impl HasOrientation for PerspectiveCamera {
+impl HasRotation for PerspectiveCamera {
     fn get_rotation(&self) -> Quat { self.rotation }
     fn set_rotation(&mut self, new_rotation: Quat) -> () { 
         self.rotation = new_rotation;

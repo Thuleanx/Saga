@@ -105,7 +105,6 @@ impl VertexBuffer {
             memory : vertex_buffer_memory
         })
     }
-
     pub unsafe fn destroy(buffer: VertexBuffer, device: &Device) {
         device.destroy_buffer(buffer.buffer, None);
         device.free_memory(buffer.memory, None);

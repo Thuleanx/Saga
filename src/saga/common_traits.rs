@@ -11,7 +11,7 @@ pub trait HasPosition {
     fn set_position(&mut self, new_position: Vec3) -> ();
 }
 
-pub trait HasOrientation {
+pub trait HasRotation {
     fn get_rotation(&self) -> Quat;
     fn set_rotation(&mut self, new_rotation: Quat) -> ();
 

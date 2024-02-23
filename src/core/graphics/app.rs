@@ -4,7 +4,7 @@ use vulkanalia::prelude::v1_0::*;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use winit::window::Window;
 use vulkanalia::vk::{KhrSwapchainExtension, Fence};
-use crate::saga::{PerspectiveCameraBuilder, Camera};
+use crate::saga::Camera;
 
 use super::appdata::AppData;
 use super::pipeline::{VERTICES, INDICES};
@@ -59,13 +59,13 @@ impl App {
         let mut data = AppData::default();
 
         let size = window.inner_size();
-        data.camera = {
-            let mut camera_builder = PerspectiveCameraBuilder::default();
-            camera_builder
-                .set_width(size.width)
-                .set_height(size.height);
-            camera_builder.build()
-        };
+        // data.camera = {
+        //     let mut camera_builder = PerspectiveCameraBuilder::default();
+        //     camera_builder
+        //         .set_width(size.width)
+        //         .set_height(size.height);
+        //     // camera_builder.build()
+        // };
 
         let (instance, optional_messenger) = instance::create_instance(window, &entry)?;
         if let Some(messenger) = optional_messenger {
@@ -88,10 +88,12 @@ impl App {
 
         data.descriptor_set_layout = descriptor::layout::create(
             &device, 
-            0, 
-            vk::DescriptorType::UNIFORM_BUFFER,
-            1,
-            vk::ShaderStageFlags::VERTEX
+            &[descriptor::layout::UBODescription {
+                binding: 0, 
+                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+                stage_flags: vk::ShaderStageFlags::VERTEX
+            }]
         )?;
 
         (data.pipeline_layout, data.pipeline) = 
@@ -323,7 +325,6 @@ impl App {
             self.data.descriptor_set_layout,
             &self.data.uniform_buffer_series.get_buffers()
         )?;
-
 
         self.data.command_buffers = command_buffers::create_command_buffers(
             &self.device, 

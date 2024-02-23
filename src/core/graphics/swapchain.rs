@@ -3,7 +3,6 @@ use vulkanalia::prelude::v1_0::*;
 use vulkanalia::vk::KhrSurfaceExtension;
 use vulkanalia::vk::KhrSwapchainExtension;
 use winit::window::Window;
-use log::*;
 
 use super::queue_families::QueueFamilyIndices;
 
@@ -17,7 +16,7 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    unsafe fn new(window: &Window, instance: &Instance, device: &Device, 
+    pub unsafe fn new(window: &Window, instance: &Instance, device: &Device, 
               surface: vk::SurfaceKHR, physical_device: vk::PhysicalDevice
     ) -> Result<Self> {
         let (swapchain, swapchain_images, swapchain_format, swapchain_extent)
@@ -34,19 +33,19 @@ impl Swapchain {
         })
     }
 
-    unsafe fn destroy(&self, device: &Device) {
+    pub fn get_chain(&self) -> vk::SwapchainKHR { self.chain }
+    pub fn get_format(&self) -> vk::Format { self.format }
+    pub fn get_extent(&self) -> vk::Extent2D { self.extent }
+    pub fn get_image_views(&self) -> &[vk::ImageView] { &self.image_views }
+    pub fn get_images(&self) -> &[vk::Image] { &self.images }
+    pub fn get_length(&self) -> usize { self.images.len() }
+
+    pub unsafe fn destroy(&mut self, device: &Device) {
+        self.destroyed = true;
         destroy_swapchain_and_image_views(
             device, self.chain, &self.image_views);
     }
 
-}
-
-impl Drop for Swapchain {
-    fn drop(&mut self) {
-        if !self.destroyed {
-            error!("swapchain dropped before properly destroyed. Call ");
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

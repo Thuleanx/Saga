@@ -42,7 +42,6 @@ pub unsafe fn create_render_pass(
         .subpasses(subpasses)
         .dependencies(dependencies);
 
-
     let render_pass = device.create_render_pass(&info, None)?;
     Ok(render_pass)
 }

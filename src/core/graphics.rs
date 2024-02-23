@@ -23,7 +23,8 @@ mod sync_objects;
 mod validation_layers;
 mod window_surface;
 mod wrappers;
-pub mod graphics;
+mod graphics;
 
 pub use self::app::App;
+pub use graphics::*;
 

@@ -3,7 +3,7 @@ use vulkanalia::prelude::v1_0::*;
 
 pub unsafe fn create_framebuffers(
     device: &Device,
-    swapchain_image_views: &Vec<vk::ImageView>,
+    swapchain_image_views: &[vk::ImageView],
     render_pass: vk::RenderPass,
     swapchain_extent: vk::Extent2D,
 ) -> Result<Vec<vk::Framebuffer>> {
@@ -24,7 +24,7 @@ pub unsafe fn create_framebuffers(
     Ok(framebuffers)
 }
 
-pub unsafe fn destroy_framebuffers(device: &Device, framebuffers: &Vec<vk::Framebuffer>) {
+pub unsafe fn destroy_framebuffers(device: &Device, framebuffers: &[vk::Framebuffer]) {
     framebuffers
         .iter()
         .for_each(|f| device.destroy_framebuffer(*f, None));

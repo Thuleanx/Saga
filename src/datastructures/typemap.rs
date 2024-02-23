@@ -3,6 +3,8 @@ use std::{
     collections::{HashMap, hash_map::ValuesMut},
 };
 
+// This is not thread safe
+
 #[derive(Default)]
 pub struct TypeMap {
     bindings: HashMap<TypeId, Box<dyn Any>>,

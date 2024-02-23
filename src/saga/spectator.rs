@@ -1,11 +1,11 @@
-use super::{common_traits::{HasOrientation, HasPosition, GameObject}, input::Input};
+use super::{common_traits::{HasRotation, HasPosition, GameObject}, input::Input};
 
 use cgmath::{InnerSpace, Zero};
 use winit::event::VirtualKeyCode as Key;
 
 type Vec3 = cgmath::Vector3<f32>;
 
-pub trait Spectator : GameObject + HasPosition + HasOrientation {
+pub trait Spectator : GameObject + HasPosition + HasRotation {
     fn get_movement_speed(&self) -> f32;
 }
 
