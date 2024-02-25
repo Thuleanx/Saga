@@ -15,3 +15,15 @@ thiserror = "1"
 tobj = { version = "3", features = ["log"] }
 vulkanalia = { version = "=0.22.0", features = ["libloading", "provisional", "window"] }
 winit = "0.28"
+bevy_app = "0.13.0"
+bevy_ecs = "0.13.0"
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
+
+

@@ -27,10 +27,14 @@ use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::WindowBuilder;
 use vulkanalia::prelude::v1_0::*;
 
+use bevy_app::prelude::*;
+
 type Mat4 = cgmath::Matrix4<f32>;
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
+
+    let app = App::new().run();
 
     // Window
     let event_loop = EventLoop::new();
@@ -164,7 +168,7 @@ fn main() -> Result<()> {
             _ => {}
         }
         })();
-
+        
         if should_recreate_swapchain {
             unsafe { 
                 graphics.device_wait_idle().unwrap();

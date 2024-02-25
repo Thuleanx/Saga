@@ -358,6 +358,7 @@ impl App {
             .iter()
             .for_each(|v| self.device.destroy_image_view(*v, None));
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
+
     }
 
 }
