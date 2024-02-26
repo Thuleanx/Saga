@@ -1,13 +1,15 @@
-use anyhow::{Result, anyhow};
-use vulkanalia::vk::{self};
+use anyhow::{anyhow, Result};
 use vulkanalia::prelude::v1_0::*;
+use vulkanalia::vk::{self};
+
+use super::command_buffers::{begin_single_time_commands, end_single_time_commands};
 
 type Vec2 = cgmath::Vector2<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 
 pub unsafe fn create_buffer(
-    instance: &Instance, 
-    device: &Device, 
+    instance: &Instance,
+    device: &Device,
     physical_device: vk::PhysicalDevice,
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
@@ -23,12 +25,8 @@ pub unsafe fn create_buffer(
 
     let memory_requirements: vk::MemoryRequirements = device.get_buffer_memory_requirements(buffer);
 
-    let memory_type_index : u32 = get_memory_type_index(
-        instance, 
-        properties,
-        memory_requirements,
-        physical_device,
-    )?;
+    let memory_type_index: u32 =
+        get_memory_type_index(instance, properties, memory_requirements, physical_device)?;
 
     let memory_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(memory_requirements.size)
@@ -42,18 +40,20 @@ pub unsafe fn create_buffer(
     Ok((buffer, buffer_memory))
 }
 
-unsafe fn get_memory_type_index(
+pub unsafe fn get_memory_type_index(
     instance: &Instance,
     properties: vk::MemoryPropertyFlags,
     requirements: vk::MemoryRequirements,
     physical_device: vk::PhysicalDevice,
 ) -> Result<u32> {
-    let memory_properties: vk::PhysicalDeviceMemoryProperties = instance.get_physical_device_memory_properties(physical_device);
+    let memory_properties: vk::PhysicalDeviceMemoryProperties =
+        instance.get_physical_device_memory_properties(physical_device);
 
     (0..memory_properties.memory_type_count)
         .find(|memory_type| {
             let is_memory_type_suitable = (requirements.memory_type_bits & (1 << memory_type)) != 0;
-            let actual_memory_type: vk::MemoryType = memory_properties.memory_types[*memory_type as usize];
+            let actual_memory_type: vk::MemoryType =
+                memory_properties.memory_types[*memory_type as usize];
 
             is_memory_type_suitable && actual_memory_type.property_flags.contains(properties)
         })
@@ -68,34 +68,12 @@ pub unsafe fn copy_buffer(
     command_pool: vk::CommandPool,
     graphics_queue: vk::Queue,
 ) -> Result<()> {
-
-    let info = vk::CommandBufferAllocateInfo::builder()
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(command_pool)
-        .command_buffer_count(1);
-
-    let command_buffer = device.allocate_command_buffers(&info)?[0];
-
-    let begin_info = vk::CommandBufferBeginInfo::builder()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-    device.begin_command_buffer(command_buffer, &begin_info)?;
+    let command_buffer = begin_single_time_commands(device, command_pool)?;
 
     let regions = vk::BufferCopy::builder().size(size);
     device.cmd_copy_buffer(command_buffer, source, destination, &[regions]);
 
-    device.end_command_buffer(command_buffer)?;
-
-    let command_buffers = &[command_buffer];
-    let submit_info = vk::SubmitInfo::builder()
-        .command_buffers(command_buffers);
-
-    device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null())?;
-
-    // can optimize by using a fence
-    device.queue_wait_idle(graphics_queue)?;
-
-    device.free_command_buffers(command_pool, command_buffers);
+    end_single_time_commands(device, graphics_queue, command_pool, command_buffer)?;
 
     Ok(())
 }

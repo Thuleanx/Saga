@@ -1,15 +1,15 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 
-use super::Graphics;
 use super::pipeline::INDICES;
 use super::queue_families::QueueFamilyIndices;
-use super::wrappers::{VertexBuffer, IndexBuffer};
+use super::wrappers::{IndexBuffer, VertexBuffer};
+use super::Graphics;
 
 pub unsafe fn allocate_command_buffers(
     device: &Device,
     command_pool: vk::CommandPool,
-    number_of_buffers: u32
+    number_of_buffers: u32,
 ) -> Result<Vec<vk::CommandBuffer>> {
     let allocate_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
@@ -30,8 +30,10 @@ pub unsafe fn record_command_buffers<F>(
     framebuffers: &[vk::Framebuffer],
     record_function: F,
     graphics: &Graphics,
-) -> Result<()> where F: Fn(&Graphics, vk::CommandBuffer, usize) -> () {
-
+) -> Result<()>
+where
+    F: Fn(&Graphics, vk::CommandBuffer, usize) -> (),
+{
     for (i, command_buffer) in command_buffers.iter().enumerate() {
         let info = vk::CommandBufferBeginInfo::builder();
 
@@ -123,9 +125,14 @@ pub unsafe fn create_command_buffers(
 
         // Bind Descriptor Set
         {
-            device.cmd_bind_descriptor_sets(*command_buffer, vk::PipelineBindPoint::GRAPHICS, 
-                                            pipeline_layout, 0, &[descriptor_sets[i]], &[]);
-
+            device.cmd_bind_descriptor_sets(
+                *command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0,
+                &[descriptor_sets[i]],
+                &[],
+            );
         }
 
         device.cmd_draw_indexed(*command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
@@ -134,15 +141,15 @@ pub unsafe fn create_command_buffers(
         device.end_command_buffer(*command_buffer)?;
     }
 
-
     Ok(command_buffers)
 }
 
 pub unsafe fn create_command_pool(
-    instance: &Instance, device: &Device, 
-    surface: vk::SurfaceKHR, physical_device: vk::PhysicalDevice
+    instance: &Instance,
+    device: &Device,
+    surface: vk::SurfaceKHR,
+    physical_device: vk::PhysicalDevice,
 ) -> Result<vk::CommandPool> {
-
     let indices = QueueFamilyIndices::get(instance, surface, physical_device)?;
 
     let info = vk::CommandPoolCreateInfo::builder()
@@ -156,4 +163,44 @@ pub unsafe fn create_command_pool(
 
 pub unsafe fn destroy_command_pool(device: &Device, command_pool: vk::CommandPool) {
     device.destroy_command_pool(command_pool, None);
+}
+
+pub unsafe fn begin_single_time_commands(
+    device: &Device,
+    command_pool: vk::CommandPool,
+) -> Result<vk::CommandBuffer> {
+    let info = vk::CommandBufferAllocateInfo::builder()
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_pool(command_pool)
+        .command_buffer_count(1);
+
+    let command_buffer = device.allocate_command_buffers(&info)?[0];
+
+    let info =
+        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+    device.begin_command_buffer(command_buffer, &info)?;
+
+    Ok(command_buffer)
+}
+
+pub unsafe fn end_single_time_commands(
+    device: &Device,
+    graphics_queue: vk::Queue,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+) -> Result<()> {
+    device.end_command_buffer(command_buffer)?;
+
+    let command_buffers = &[command_buffer];
+    let submit_info = vk::SubmitInfo::builder().command_buffers(command_buffers);
+
+    device.queue_submit(graphics_queue, &[submit_info], vk::Fence::null())?;
+
+    // can optimize by using a fence
+    device.queue_wait_idle(graphics_queue)?;
+
+    device.free_command_buffers(command_pool, command_buffers);
+
+    Ok(())
 }

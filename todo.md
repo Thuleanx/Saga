@@ -1,0 +1,5 @@
+- [ ] Implement depth buffering
+- [ ] Implement texture sampling
+- [ ] Integrate Bevy
+- [ ] Create music for jam
+- [ ] Create jam plan
