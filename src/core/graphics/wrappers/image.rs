@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::{fs::File, path::Path};
 use vulkanalia::{
     vk::{self, DeviceV1_0, HasBuilder},
@@ -14,11 +14,6 @@ pub struct Image {
     width: u32,
     height: u32,
     pixels: Vec<u8>, // this is in [r, g, b, a] tuples
-}
-
-pub struct LoadedImage {
-    image: vk::Image,
-    memory: vk::DeviceMemory,
 }
 
 impl Image {
@@ -40,6 +35,12 @@ impl Image {
             pixels,
         })
     }
+}
+
+pub struct LoadedImage {
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    image_view: vk::ImageView,
 }
 
 impl LoadedImage {
@@ -110,12 +111,20 @@ impl LoadedImage {
         device.destroy_buffer(staging_buffer, None);
         device.free_memory(staging_buffer_memory, None);
 
-        Ok( Self { image: texture_image, memory: texture_image_memory } )
+        let texture_image_view =
+            create_image_view(device, texture_image, vk::Format::R8G8B8A8_SRGB)?;
+
+        Ok(Self {
+            image: texture_image,
+            memory: texture_image_memory,
+            image_view: texture_image_view,
+        })
     }
 
     pub unsafe fn destroy(&mut self, device: &Device) {
         device.destroy_image(self.image, None);
         device.free_memory(self.memory, None);
+        device.destroy_image_view(self.image_view, None);
     }
 }
 
@@ -263,4 +272,27 @@ pub unsafe fn copy_buffer_to_image(
     end_single_time_commands(device, graphics_queue, command_pool, command_buffer)?;
 
     Ok(())
+}
+
+pub unsafe fn create_image_view(
+    device: &Device,
+    image: vk::Image,
+    format: vk::Format,
+) -> Result<vk::ImageView> {
+    let subresource_range = vk::ImageSubresourceRange::builder()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(0)
+        .level_count(1)
+        .base_array_layer(0)
+        .layer_count(1);
+
+    let info = vk::ImageViewCreateInfo::builder()
+        .image(image)
+        .view_type(vk::ImageViewType::_2D)
+        .format(format)
+        .subresource_range(subresource_range);
+
+    let image_view = device.create_image_view(&info, None)?;
+
+    Ok(image_view)
 }

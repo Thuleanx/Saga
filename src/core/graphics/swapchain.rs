@@ -5,6 +5,7 @@ use vulkanalia::vk::KhrSwapchainExtension;
 use winit::window::Window;
 
 use super::queue_families::QueueFamilyIndices;
+use super::wrappers::create_image_view;
 
 pub struct Swapchain {
     chain: vk::SwapchainKHR,
@@ -175,28 +176,7 @@ pub unsafe fn create_swapchain_image_views(
 ) -> Result<Vec<vk::ImageView>> {
     let swapchain_image_views = swapchain_images
         .iter()
-        .map(|i| {
-            let components = vk::ComponentMapping::builder()
-                .r(vk::ComponentSwizzle::IDENTITY)
-                .g(vk::ComponentSwizzle::IDENTITY)
-                .b(vk::ComponentSwizzle::IDENTITY)
-                .a(vk::ComponentSwizzle::IDENTITY);
-            let subresource_range = vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1);
-
-            let info = vk::ImageViewCreateInfo::builder()
-                .image(*i)
-                .view_type(vk::ImageViewType::_2D)
-                .format(swapchain_format)
-                .components(components)
-                .subresource_range(subresource_range);
-
-            device.create_image_view(&info, None)
-        })
+        .map(|i| create_image_view(device, *i, swapchain_format) )
         .collect::<Result<Vec<_>, _>>()?;
     Ok(swapchain_image_views)
 }
@@ -207,5 +187,9 @@ pub unsafe fn destroy_swapchain_and_image_views(device: &Device,
         .iter()
         .for_each(|v| device.destroy_image_view(*v, None));
     device.destroy_swapchain_khr(swapchain, None);
+}
+
+pub unsafe fn create_texture_sampler(device: &Device) -> Result<()> {
+    Ok(())
 }
 
