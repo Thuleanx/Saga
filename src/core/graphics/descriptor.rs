@@ -4,7 +4,7 @@ pub mod layout {
     use anyhow::Result;
     use vulkanalia::prelude::v1_0::*;
 
-    pub struct UBODescription {
+    pub struct DescriptorInfo {
         pub binding: u32,
         pub descriptor_type: vk::DescriptorType,
         pub descriptor_count: u32,
@@ -13,10 +13,10 @@ pub mod layout {
 
     pub unsafe fn create(
         device: &Device,
-        ubo_specs: &[UBODescription],
+        descriptors: &[DescriptorInfo],
     ) -> Result<vk::DescriptorSetLayout> {
         let ubo_bindings : Vec<vk::DescriptorSetLayoutBindingBuilder<'_>>
-            = ubo_specs
+            = descriptors
             .iter()
             .map(|spec| {
                 vk::DescriptorSetLayoutBinding::builder()
@@ -49,47 +49,50 @@ pub mod pool {
     #[derive(Clone, Copy, Debug, Default)]
     pub struct Pool {
         pool: vk::DescriptorPool,
-        type_: vk::DescriptorType,
         size: u32,
     }
 
     impl Pool {
-        pub fn get_type(&self) -> vk::DescriptorType { self.type_ }
         pub fn get_pool(&self) -> vk::DescriptorPool { self.pool }
+    }
+
+    pub struct PoolDescription {
+        pub type_: vk::DescriptorType,
+        pub descriptor_count: u32,
     }
 
     pub unsafe fn create(
         device: &Device,
-        type_: vk::DescriptorType,
-        descriptor_count: u32,
+        pool_descriptions: &[PoolDescription],
+        max_descriptor_sets: u32
     ) -> Result<Pool> {
 
-        let ubo_size: vk::DescriptorPoolSizeBuilder 
-            = vk::DescriptorPoolSize::builder()
-            .type_(type_)
-            .descriptor_count(descriptor_count);
+        let pool_sizes : Vec<vk::DescriptorPoolSizeBuilder>
+            = pool_descriptions
+            .iter()
+            .map(|description| {
+                vk::DescriptorPoolSize::builder()
+                    .type_(description.type_)
+                    .descriptor_count(description.descriptor_count)
+            }).collect();
 
-        let pool_size: &[vk::DescriptorPoolSizeBuilder; 1] 
-            = &[ubo_size];
         let pool_create_info: vk::DescriptorPoolCreateInfoBuilder<'_> 
             = vk::DescriptorPoolCreateInfo::builder()
-            .pool_sizes(pool_size)
-            .max_sets(descriptor_count)
+            .pool_sizes(&pool_sizes)
+            .max_sets(max_descriptor_sets)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
 
         let descriptor_pool = device.create_descriptor_pool(&pool_create_info, None)?;
 
         Ok(Pool {
             pool: descriptor_pool,
-            type_,
-            size: descriptor_count,
+            size: max_descriptor_sets,
         })
     }
 
     pub unsafe fn destroy(device: &Device, pool: &Pool) {
         device.destroy_descriptor_pool(pool.pool, None);
     }
-
 }
 
 pub mod set {
@@ -143,7 +146,7 @@ pub mod set {
                 .dst_set(descriptor_sets[i])
                 .dst_binding(0)
                 .dst_array_element(0)
-                .descriptor_type(descriptor_pool.get_type())
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(buffer_info);
 
             device.update_descriptor_sets(&[ubo_write], &[] as &[vk::CopyDescriptorSet]);
