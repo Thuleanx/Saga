@@ -3,17 +3,22 @@ use log::*;
 use std::collections::HashSet;
 use vulkanalia::prelude::v1_0::*;
 
-use crate::core::config::DEVICE_EXTENSIONS;
 use super::errors::SuitabilityError;
 use super::queue_families::QueueFamilyIndices;
+use crate::core::config::DEVICE_EXTENSIONS;
 
-pub unsafe fn pick_physical_device(instance: &Instance, window_surface: vk::SurfaceKHR) -> Result<vk::PhysicalDevice> {
-   
+pub unsafe fn pick_physical_device(
+    instance: &Instance,
+    window_surface: vk::SurfaceKHR,
+) -> Result<vk::PhysicalDevice> {
     for physical_device in instance.enumerate_physical_devices()? {
         let properties = instance.get_physical_device_properties(physical_device);
 
         if let Err(error) = check_physical_device(instance, window_surface, physical_device) {
-            warn!("Skipping physical device (`{}`): {}", properties.device_name, error);
+            warn!(
+                "Skipping physical device (`{}`): {}",
+                properties.device_name, error
+            );
         } else {
             info!("Selected physical device (`{}`).", properties.device_name);
             return Ok(physical_device);
@@ -31,12 +36,19 @@ unsafe fn check_physical_device(
 ) -> Result<()> {
     let properties = instance.get_physical_device_properties(physical_device);
     if properties.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
-        return Err(anyhow!(SuitabilityError("Only discrete GPUs are supported.")));
+        return Err(anyhow!(SuitabilityError(
+            "Only discrete GPUs are supported."
+        )));
     }
 
     let features = instance.get_physical_device_features(physical_device);
+    if features.sampler_anisotropy != vk::TRUE {
+        return Err(anyhow!(SuitabilityError("No sampler anisotropy.")));
+    }
     if features.geometry_shader != vk::TRUE {
-        return Err(anyhow!(SuitabilityError("Missing geometry shader support.")));
+        return Err(anyhow!(SuitabilityError(
+            "Missing geometry shader support."
+        )));
     }
 
     QueueFamilyIndices::get(instance, window_surface, physical_device)?;
@@ -52,7 +64,7 @@ unsafe fn check_physical_device(
 
 unsafe fn check_physical_device_extensions(
     instance: &Instance,
-    physical_device: vk::PhysicalDevice
+    physical_device: vk::PhysicalDevice,
 ) -> Result<()> {
     let extensions = instance
         .enumerate_device_extension_properties(physical_device, None)?
@@ -63,7 +75,8 @@ unsafe fn check_physical_device_extensions(
     if DEVICE_EXTENSIONS.iter().all(|e| extensions.contains(e)) {
         Ok(())
     } else {
-        Err(anyhow!(SuitabilityError("Missing required device extensions.")))
+        Err(anyhow!(SuitabilityError(
+            "Missing required device extensions."
+        )))
     }
 }
-

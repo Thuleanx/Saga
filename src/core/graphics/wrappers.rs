@@ -2,6 +2,7 @@ mod vertex_buffer;
 mod index_buffer;
 mod uniform_buffer_object;
 mod image;
+mod image_sampler;
 
 pub use vertex_buffer::{Vertex, VertexBuffer};
 pub use index_buffer::{Index, IndexBuffer};
