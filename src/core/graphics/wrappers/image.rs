@@ -44,6 +44,12 @@ pub struct LoadedImage {
 }
 
 impl LoadedImage {
+    pub fn get_image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+}
+
+impl LoadedImage {
     pub unsafe fn load_into_memory(
         image: &Image,
         instance: &Instance,
@@ -296,5 +302,3 @@ pub unsafe fn create_image_view(
 
     Ok(image_view)
 }
-
-
