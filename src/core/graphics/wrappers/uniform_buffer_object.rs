@@ -37,7 +37,7 @@ pub mod uniform_buffer {
             &self.buffer_memories
         }
 
-        pub unsafe fn bind_to_descriptor_sets<T>(&self, device: &Device, descriptor_sets: &[vk::DescriptorSet], binding: u64) {
+        pub unsafe fn bind_to_descriptor_sets<T>(&self, device: &Device, descriptor_sets: &[vk::DescriptorSet], binding: u32) {
             let size_of_buffer_object = size_of::<T>() as u64;
 
             for i in 0..self.buffers.len() {

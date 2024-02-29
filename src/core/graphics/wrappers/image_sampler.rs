@@ -1,13 +1,12 @@
-use anyhow::{anyhow, Result};
-use std::{fs::File, path::Path};
+use anyhow::Result;
 use vulkanalia::{
     vk::{self, DeviceV1_0, HasBuilder},
-    Device, Instance,
+    Device,
 };
 
 use super::LoadedImage;
 
-struct ImageSampler {
+pub struct ImageSampler {
     sampler: vk::Sampler,
 }
 
@@ -46,10 +45,10 @@ pub unsafe fn create_image_sampler(device: &Device) -> Result<vk::Sampler> {
     Ok(texture_sampler)
 }
 
-pub unsafe fn bind_sampler_to_descriptor_sets(device: &Device, sampler: &ImageSampler, image: &LoadedImage, descriptor_sets: &[vk::DescriptorSet], binding: u64) {
+pub unsafe fn bind_sampler_to_descriptor_sets(device: &Device, sampler: &ImageSampler, image: &LoadedImage, descriptor_sets: &[vk::DescriptorSet], binding: u32) {
     descriptor_sets
         .iter()
-        .for_each(|descriptor_set| => {
+        .for_each(|descriptor_set| {
             let info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(image.get_image_view())
@@ -57,14 +56,14 @@ pub unsafe fn bind_sampler_to_descriptor_sets(device: &Device, sampler: &ImageSa
 
             let image_info = &[info];
             let sampler_write = vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set)
+                .dst_set(descriptor_set.clone())
                 .dst_binding(binding)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(image_info);
 
             device.update_descriptor_sets(
-                &[ubo_write, sampler_write],
+                &[sampler_write],
                 &[] as &[vk::CopyDescriptorSet],
             );
         });

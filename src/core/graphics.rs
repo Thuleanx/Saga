@@ -4,7 +4,6 @@
  *
  */
 
-mod app;
 mod appdata;
 mod buffers;
 mod command_buffers;
@@ -25,6 +24,5 @@ mod window_surface;
 mod wrappers;
 mod graphics;
 
-pub use self::app::App;
 pub use graphics::*;
 

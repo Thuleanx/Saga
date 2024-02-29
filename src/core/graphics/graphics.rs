@@ -590,17 +590,23 @@ impl Graphics {
         uniform_buffer::destroy_series(&self.device, uniform_buffers);
     }
 
-    pub unsafe fn create_descriptor_sets<T>(
+    pub unsafe fn create_descriptor_sets(
         &self,
-        uniform_buffer_series: &UniformBufferSeries,
     ) -> Result<Vec<vk::DescriptorSet>> {
-        Ok(unsafe {
-            descriptor::set::create::<T>(
+
+        let descriptor_sets: Vec<vk::DescriptorSet> = unsafe {
+            descriptor::set::create(
                 &self.device,
                 &self.descriptor_pool,
                 self.descriptor_set_layout,
-                uniform_buffer_series.get_buffers(),
+                self.swapchain.get_length(),
             )?
-        })
+        };
+
+        Ok(descriptor_sets)
+    }
+
+    pub unsafe fn bind_uniform_buffer<T>(&self, uniform_buffers: &UniformBufferSeries, descriptor_sets: &[vk::DescriptorSet], binding: u32) {
+        uniform_buffers.bind_to_descriptor_sets::<T>(&self.device, descriptor_sets, binding)
     }
 }
