@@ -4,16 +4,16 @@ use cgmath::vec3;
 
 use super::{shader, wrappers::Vertex};
 
-pub static VERTICES: [Vertex; 4] = [
-    // Vertex::new(vec3(-0.5, -0.5, 0.0), vec3(1.0, 0.0, 0.0)),
-    // Vertex::new(vec3(0.5, -0.5, 0.0), vec3(0.0, 1.0, 0.0)),
-    // Vertex::new(vec3(0.5, 0.5, 0.0), vec3(0.0, 0.0, 1.0)),
-    // Vertex::new(vec3(-0.5, 0.5, 0.0), vec3(1.0, 1.0, 1.0)),
-    Vertex::new(vec3(-0.5, -0.5, 0.0)),
-    Vertex::new(vec3(0.5, -0.5, 0.0)),
-    Vertex::new(vec3(0.5, 0.5, 0.0)),
-    Vertex::new(vec3(-0.5, 0.5, 0.0)),
-];
+// pub static VERTICES: [Vertex; 4] = [
+//     // Vertex::new(vec3(-0.5, -0.5, 0.0), vec3(1.0, 0.0, 0.0)),
+//     // Vertex::new(vec3(0.5, -0.5, 0.0), vec3(0.0, 1.0, 0.0)),
+//     // Vertex::new(vec3(0.5, 0.5, 0.0), vec3(0.0, 0.0, 1.0)),
+//     // Vertex::new(vec3(-0.5, 0.5, 0.0), vec3(1.0, 1.0, 1.0)),
+//     Vertex::new(vec3(-0.5, -0.5, 0.0)),
+//     Vertex::new(vec3(0.5, -0.5, 0.0)),
+//     Vertex::new(vec3(0.5, 0.5, 0.0)),
+//     Vertex::new(vec3(-0.5, 0.5, 0.0)),
+// ];
 
 pub static INDICES : &[u16] = &[0, 1, 2, 2, 3, 0];
 

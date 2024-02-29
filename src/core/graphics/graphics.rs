@@ -1,6 +1,6 @@
 use crate::core::{config::MAX_FRAMES_IN_FLIGHT, graphics::renderpass};
 use anyhow::{anyhow, Result};
-use cgmath::vec3;
+use cgmath::{vec2, vec3};
 use log::info;
 use std::{fmt::Debug, path::Path, time::Instant};
 use tobj::{self};
@@ -23,6 +23,7 @@ use super::{
 pub use uniform_buffer::UniformBufferSeries;
 
 type Vec3 = cgmath::Vector3<f32>;
+type Vec2 = cgmath::Vector2<f32>;
 type Index = u16;
 
 pub struct CPUMesh {
@@ -494,10 +495,10 @@ impl Graphics {
                     mesh.positions[3 * v + 2],
                 );
 
-                vertices.push(Vertex::new(
-                    pos,
-                    // pos
-                ));
+                let uv: Vec2 = vec2(mesh.texcoords[2 * v], mesh.texcoords[2 * v + 1]);
+                info!("Vertex pos ({}, {}, {}) ({}, {})", pos.x, pos.y, pos.z, uv.x, uv.y);
+
+                vertices.push(Vertex::new(pos, uv));
             }
 
             info!(
@@ -590,10 +591,7 @@ impl Graphics {
         uniform_buffer::destroy_series(&self.device, uniform_buffers);
     }
 
-    pub unsafe fn create_descriptor_sets(
-        &self,
-    ) -> Result<Vec<vk::DescriptorSet>> {
-
+    pub unsafe fn create_descriptor_sets(&self) -> Result<Vec<vk::DescriptorSet>> {
         let descriptor_sets: Vec<vk::DescriptorSet> = unsafe {
             descriptor::set::create(
                 &self.device,
@@ -606,7 +604,12 @@ impl Graphics {
         Ok(descriptor_sets)
     }
 
-    pub unsafe fn bind_uniform_buffer<T>(&self, uniform_buffers: &UniformBufferSeries, descriptor_sets: &[vk::DescriptorSet], binding: u32) {
+    pub unsafe fn bind_uniform_buffer<T>(
+        &self,
+        uniform_buffers: &UniformBufferSeries,
+        descriptor_sets: &[vk::DescriptorSet],
+        binding: u32,
+    ) {
         uniform_buffers.bind_to_descriptor_sets::<T>(&self.device, descriptor_sets, binding)
     }
 }
