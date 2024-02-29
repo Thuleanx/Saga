@@ -1,6 +1,5 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
-use cgmath::vec3;
 
 use super::{shader, wrappers::Vertex};
 
@@ -98,6 +97,14 @@ pub unsafe fn create_pipeline(
         .logic_op(vk::LogicOp::COPY)
         .attachments(attachments)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_bounds_test_enable(false)
+        .min_depth_bounds(0.0)
+        .max_depth_bounds(1.0)
+        .stencil_test_enable(false);
 
     let set_layouts = &[set_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::builder()
@@ -114,6 +121,7 @@ pub unsafe fn create_pipeline(
         .rasterization_state(&rasterization_state)
         .multisample_state(&multisample_state)
         .color_blend_state(&color_blend_state)
+        .depth_stencil_state(&depth_stencil_state)
         .layout(pipeline_layout)
         .render_pass(render_pass)
         .subpass(0)

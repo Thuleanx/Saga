@@ -176,7 +176,7 @@ pub unsafe fn create_swapchain_image_views(
 ) -> Result<Vec<vk::ImageView>> {
     let swapchain_image_views = swapchain_images
         .iter()
-        .map(|i| create_image_view(device, *i, swapchain_format) )
+        .map(|i| create_image_view(device, *i, swapchain_format, vk::ImageAspectFlags::COLOR) )
         .collect::<Result<Vec<_>, _>>()?;
     Ok(swapchain_image_views)
 }

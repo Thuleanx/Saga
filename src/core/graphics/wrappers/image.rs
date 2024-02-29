@@ -81,8 +81,17 @@ impl LoadedImage {
 
         device.unmap_memory(staging_buffer_memory);
 
-        let (texture_image, texture_image_memory) =
-            create_vk_image(instance, device, physical_device, image.width, image.height)?;
+        let (texture_image, texture_image_memory) = create_vk_image(
+            instance,
+            device,
+            physical_device,
+            image.width,
+            image.height,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
         transition_image_layout(
             device,
@@ -117,8 +126,12 @@ impl LoadedImage {
         device.destroy_buffer(staging_buffer, None);
         device.free_memory(staging_buffer_memory, None);
 
-        let texture_image_view =
-            create_image_view(device, texture_image, vk::Format::R8G8B8A8_SRGB)?;
+        let texture_image_view = create_image_view(
+            device,
+            texture_image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageAspectFlags::COLOR,
+        )?;
 
         Ok(Self {
             image: texture_image,
@@ -140,6 +153,10 @@ pub unsafe fn create_vk_image(
     physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
+    format: vk::Format,
+    tiling: vk::ImageTiling,
+    usage: vk::ImageUsageFlags,
+    memory_property_mode: vk::MemoryPropertyFlags,
 ) -> Result<(vk::Image, vk::DeviceMemory)> {
     let info = vk::ImageCreateInfo::builder()
         .image_type(vk::ImageType::_2D)
@@ -150,10 +167,10 @@ pub unsafe fn create_vk_image(
         })
         .mip_levels(1)
         .array_layers(1)
-        .format(vk::Format::R8G8B8A8_SRGB)
-        .tiling(vk::ImageTiling::OPTIMAL)
+        .format(format)
+        .tiling(tiling)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+        .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::_1)
         .flags(vk::ImageCreateFlags::empty());
@@ -166,7 +183,7 @@ pub unsafe fn create_vk_image(
         .allocation_size(requirements.size)
         .memory_type_index(get_memory_type_index(
             instance,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            memory_property_mode,
             requirements,
             physical_device,
         )?);
@@ -203,11 +220,29 @@ pub unsafe fn transition_image_layout(
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,
             ),
+            (vk::ImageLayout::UNDEFINED, vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL) => (
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            ),
             _ => return Err(anyhow!("Unsupported image layout transition!")),
         };
 
+    let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
+        match format {
+            vk::Format::D32_SFLOAT_S8_UINT | vk::Format::D24_UNORM_S8_UINT => {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            }
+            _ => vk::ImageAspectFlags::DEPTH,
+        }
+    } else {
+        vk::ImageAspectFlags::COLOR
+    };
+
     let subresource = vk::ImageSubresourceRange::builder()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .aspect_mask(aspect_mask)
         .base_mip_level(0)
         .level_count(1)
         .base_array_layer(0)
@@ -284,9 +319,10 @@ pub unsafe fn create_image_view(
     device: &Device,
     image: vk::Image,
     format: vk::Format,
+    aspects: vk::ImageAspectFlags,
 ) -> Result<vk::ImageView> {
     let subresource_range = vk::ImageSubresourceRange::builder()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .aspect_mask(aspects)
         .base_mip_level(0)
         .level_count(1)
         .base_array_layer(0)

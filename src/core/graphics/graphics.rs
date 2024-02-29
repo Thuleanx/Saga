@@ -11,6 +11,7 @@ use vulkanalia::{
 };
 use winit::window::Window;
 
+use super::wrappers::DepthBuffer;
 use super::{
     command_buffers::{self, record_command_buffers},
     descriptor, framebuffer, instance, logical_device, physical_device, pipeline,
@@ -102,6 +103,7 @@ pub struct Graphics {
 
     // on swapchain
     swapchain: Swapchain,
+    depth_buffer: DepthBuffer,
 
     pipeline: vk::Pipeline,
     render_pass: vk::RenderPass,
@@ -131,8 +133,29 @@ impl Graphics {
         let swapchain: Swapchain = unsafe {
             swapchain::Swapchain::new(window, &instance, &device, surface, physical_device)?
         };
-        let render_pass =
-            unsafe { renderpass::create_render_pass(&instance, &device, swapchain.get_format())? };
+
+        let command_pool = unsafe {
+            command_buffers::create_command_pool(&instance, &device, surface, physical_device)?
+        };
+        let depth_buffer: DepthBuffer = unsafe {
+            DepthBuffer::new(
+                &instance,
+                &device,
+                physical_device,
+                &swapchain,
+                graphics_queue,
+                command_pool,
+            )?
+        };
+
+        let render_pass = unsafe {
+            renderpass::create_render_pass(
+                &instance,
+                &device,
+                physical_device,
+                swapchain.get_format(),
+            )?
+        };
         let descriptor_set_layout: vk::DescriptorSetLayout = unsafe {
             descriptor::layout::create(
                 &device,
@@ -165,11 +188,9 @@ impl Graphics {
                 &device,
                 swapchain.get_image_views(),
                 render_pass,
+                &depth_buffer,
                 swapchain.get_extent(),
             )?
-        };
-        let command_pool = unsafe {
-            command_buffers::create_command_pool(&instance, &device, surface, physical_device)?
         };
         let graphics_barriers = GraphicsBarriers::new(&device, swapchain.get_images())?;
         let command_buffers = unsafe {
@@ -216,6 +237,7 @@ impl Graphics {
             descriptor_set_layout,
             descriptor_pool,
             swapchain,
+            depth_buffer,
             pipeline,
             render_pass,
             pipeline_layout,
@@ -372,10 +394,21 @@ impl Graphics {
                     self.physical_device,
                 )?
             };
+            self.depth_buffer = unsafe {
+                DepthBuffer::new(
+                    &self.instance,
+                    &self.device,
+                    self.physical_device,
+                    &self.swapchain,
+                    self.graphics_queue,
+                    self.command_pool,
+                )?
+            };
             self.render_pass = unsafe {
                 renderpass::create_render_pass(
                     &self.instance,
                     &self.device,
+                    self.physical_device,
                     self.swapchain.get_format(),
                 )?
             };
@@ -392,6 +425,7 @@ impl Graphics {
                     &self.device,
                     self.swapchain.get_image_views(),
                     self.render_pass,
+                    &self.depth_buffer,
                     self.swapchain.get_extent(),
                 )?
             };
@@ -429,6 +463,7 @@ impl Graphics {
             framebuffer::destroy_framebuffers(&self.device, &self.framebuffers);
             pipeline::destroy_pipeline(&self.device, self.pipeline, self.pipeline_layout);
             renderpass::destroy_render_pass(&self.device, self.render_pass);
+            self.depth_buffer.destroy(&self.device);
             self.swapchain.destroy(&self.device);
         }
     }
@@ -496,7 +531,10 @@ impl Graphics {
                 );
 
                 let uv: Vec2 = vec2(mesh.texcoords[2 * v], mesh.texcoords[2 * v + 1]);
-                info!("Vertex pos ({}, {}, {}) ({}, {})", pos.x, pos.y, pos.z, uv.x, uv.y);
+                info!(
+                    "Vertex pos ({}, {}, {}) ({}, {})",
+                    pos.x, pos.y, pos.z, uv.x, uv.y
+                );
 
                 vertices.push(Vertex::new(pos, uv));
             }
