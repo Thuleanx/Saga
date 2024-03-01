@@ -61,8 +61,9 @@ fn main() -> Result<()> {
     }?;
 
     let path_to_obj = std::env::current_dir().unwrap().join("assets").join("meshes").join("Imphat.obj");
+    let path_to_texture = std::env::current_dir().unwrap().join("assets").join("meshes").join("imphat_diffuse.png");
 
-    let mesh_builder = MeshBuilder::new(&path_to_obj);
+    let mesh_builder = MeshBuilder::new(&path_to_obj, &path_to_texture);
 
     let mesh = mesh_builder.build(&graphics)?;
 

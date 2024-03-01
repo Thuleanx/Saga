@@ -10,7 +10,6 @@ use vulkanalia::{
     vk::{DebugUtilsMessengerEXT, KhrSwapchainExtension},
 };
 use winit::window::Window;
-
 use super::wrappers::DepthBuffer;
 use super::{
     command_buffers::{self, record_command_buffers},
@@ -20,12 +19,14 @@ use super::{
     validation_layers, window_surface,
     wrappers::{uniform_buffer, IndexBuffer, Vertex, VertexBuffer},
 };
-
-pub use uniform_buffer::UniformBufferSeries;
+use log::*;
 
 type Vec3 = cgmath::Vector3<f32>;
 type Vec2 = cgmath::Vector2<f32>;
 type Index = u16;
+
+pub use super::wrappers::{Image, LoadedImage};
+pub use uniform_buffer::UniformBufferSeries;
 
 pub struct CPUMesh {
     vertices: Vec<Vertex>,
@@ -531,10 +532,10 @@ impl Graphics {
                 );
 
                 let uv: Vec2 = vec2(mesh.texcoords[2 * v], mesh.texcoords[2 * v + 1]);
-                info!(
-                    "Vertex pos ({}, {}, {}) ({}, {})",
-                    pos.x, pos.y, pos.z, uv.x, uv.y
-                );
+                // info!(
+                //     "Vertex pos ({}, {}, {}) ({}, {})",
+                //     pos.x, pos.y, pos.z, uv.x, uv.y
+                // );
 
                 vertices.push(Vertex::new(pos, uv));
             }
@@ -582,6 +583,26 @@ impl Graphics {
     pub unsafe fn unload_from_gpu(&self, mesh: &GPUMesh) -> Result<()> {
         VertexBuffer::destroy(mesh.vertex_buffer, &self.device);
         IndexBuffer::destroy(mesh.index_buffer, &self.device);
+        Ok(())
+    }
+
+    pub unsafe fn load_texture_to_gpu(&self, image: &Image) -> Result<LoadedImage> {
+        let loaded_image = unsafe {
+            LoadedImage::load_into_memory(
+                image,
+                &self.instance,
+                &self.device,
+                self.physical_device,
+                self.graphics_queue,
+                self.command_pool,
+            )?
+        };
+
+        Ok(loaded_image)
+    }
+
+    pub unsafe fn unload_texture_from_gpu(&self, loaded_image: &LoadedImage) -> Result<()> {
+        loaded_image.destroy(&self.device);
         Ok(())
     }
 

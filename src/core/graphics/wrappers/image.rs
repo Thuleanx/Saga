@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use log::info;
 use std::{fs::File, path::Path};
 use vulkanalia::{
     vk::{self, DeviceV1_0, HasBuilder},
@@ -23,11 +24,12 @@ impl Image {
         let decoder = png::Decoder::new(image);
 
         let mut reader = decoder.read_info()?;
-        let mut pixels = vec![0; reader.info().raw_bytes()];
-        reader.next_frame(&mut pixels)?;
 
-        let size = reader.info().raw_bytes() as u64;
+        let size = reader.output_buffer_size() as u64;
         let (width, height) = reader.info().size();
+
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        reader.next_frame(&mut pixels)?;
 
         Ok(Image {
             width,
@@ -140,7 +142,7 @@ impl LoadedImage {
         })
     }
 
-    pub unsafe fn destroy(&mut self, device: &Device) {
+    pub unsafe fn destroy(&self, device: &Device) {
         device.destroy_image(self.image, None);
         device.free_memory(self.memory, None);
         device.destroy_image_view(self.image_view, None);
