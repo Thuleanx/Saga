@@ -91,7 +91,7 @@ pub unsafe fn get_depth_format(
     )
 }
 
-unsafe fn get_supported_format(
+pub unsafe fn get_supported_format(
     instance: &Instance,
     physical_device: vk::PhysicalDevice,
     candidates: &[vk::Format],

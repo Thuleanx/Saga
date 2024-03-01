@@ -65,7 +65,7 @@ fn main() -> Result<()> {
 
     let mesh_builder = MeshBuilder::new(&path_to_obj, &path_to_texture);
 
-    let mesh = mesh_builder.build(&graphics)?;
+    let mesh = mesh_builder.build(&graphics, &camera)?;
 
     unsafe { 
         graphics.record_command_buffers(|graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| {
@@ -177,6 +177,7 @@ fn main() -> Result<()> {
                 camera.before_swapchain_recreate(&graphics).unwrap(); 
                 graphics.recreate_swapchain(&window).unwrap();
                 camera.after_swapchain_recreate(&graphics).unwrap(); 
+                mesh.after_swapchain_recreate(&graphics, &camera).unwrap();
                 graphics.record_command_buffers(|graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| {
                     unsafe { 
                         mesh.bind(&graphics, command_buffer); 

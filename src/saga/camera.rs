@@ -79,6 +79,10 @@ pub struct PerspectiveCamera {
 }
 
 impl PerspectiveCamera {
+    pub fn get_descriptor_set(&self) -> Vec<vk::DescriptorSet> {
+        self.descriptor_sets.clone()
+    }
+
     pub fn set_width(&mut self, width: u32) -> () {
         self.width = width;
         self.projection = self.calculate_projection_matrix();
@@ -111,7 +115,13 @@ impl PerspectiveCamera {
 
         self.descriptor_sets = unsafe { graphics.create_descriptor_sets()? };
 
-        unsafe { graphics.bind_uniform_buffer::<UniformBufferObject>(&self.uniform_buffers, &self.descriptor_sets, 0) }
+        unsafe {
+            graphics.bind_uniform_buffer::<UniformBufferObject>(
+                &self.uniform_buffers,
+                &self.descriptor_sets,
+                0,
+            )
+        }
 
         Ok(())
     }
@@ -222,7 +232,13 @@ impl PerspectiveCameraBuilder {
 
         let descriptor_sets: Vec<vk::DescriptorSet> = unsafe { graphics.create_descriptor_sets()? };
 
-        unsafe { graphics.bind_uniform_buffer::<UniformBufferObject>(&uniform_buffers, &descriptor_sets, 0) }
+        unsafe {
+            graphics.bind_uniform_buffer::<UniformBufferObject>(
+                &uniform_buffers,
+                &descriptor_sets,
+                0,
+            )
+        }
 
         let mut builder_result = PerspectiveCamera {
             position: self.position,
@@ -302,15 +318,24 @@ impl Camera for PerspectiveCamera {
         );
 
         let inverse_tan_half_fov: f32 = 1.0 / (self.field_of_view / 2.0).tan();
-        let inverse_aspect_ratio: f32 = (self.width as f32) / (self.height as f32);
+        let inverse_aspect_ratio: f32 = match self.height {
+            0 => 0.0 as f32,
+            _ => (self.width as f32) / (self.height as f32),
+        };
 
         let projection_matrix_c0r0: f32 = inverse_tan_half_fov * inverse_aspect_ratio;
         let projection_matrix_c1r1: f32 = inverse_tan_half_fov;
         let projection_matrix_c2r2: f32 =
             self.far_plane_distance / (self.far_plane_distance - self.near_plane_distance);
         let projection_matrix_c2r3: f32 = 1.0;
-        let projection_matrix_c3r2: f32 = -self.far_plane_distance * self.near_plane_distance
-            / (self.far_plane_distance - self.near_plane_distance);
+        let projection_matrix_c3r2: f32 = match self.far_plane_distance == self.near_plane_distance
+        {
+            true => 0.0 as f32,
+            false => {
+                -self.far_plane_distance * self.near_plane_distance
+                    / (self.far_plane_distance - self.near_plane_distance)
+            }
+        };
 
         // according to the following:
         // https://johannesugb.github.io/gpu-programming/setting-up-a-proper-vulkan-projection-matrix/

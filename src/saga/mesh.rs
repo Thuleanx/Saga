@@ -1,7 +1,10 @@
 use std::path::Path;
 
-use super::common_traits::{HasPosition, HasRotation};
-use crate::core::graphics::{GPUMesh, Graphics, Image, LoadedImage};
+use super::{
+    common_traits::{HasPosition, HasRotation},
+    PerspectiveCamera,
+};
+use crate::core::graphics::{GPUMesh, Graphics, Image, ImageSampler, LoadedImage};
 use anyhow::Result;
 use cgmath::{One, Quaternion, Zero};
 use vulkanalia::prelude::v1_0::*;
@@ -14,6 +17,7 @@ pub struct Mesh {
     rotation: Quat,
     gpu_mesh: GPUMesh,
     texture: LoadedImage,
+    texture_sampler: ImageSampler,
 }
 
 impl Mesh {
@@ -28,6 +32,19 @@ impl Mesh {
     pub unsafe fn unload(&self, graphics: &Graphics) -> Result<()> {
         graphics.unload_from_gpu(&self.gpu_mesh)?;
         graphics.unload_texture_from_gpu(&self.texture)?;
+        graphics.unload_sampler_from_gpu(&self.texture_sampler)?;
+        Ok(())
+    }
+
+    pub unsafe fn after_swapchain_recreate(&self, graphics: &Graphics, camera: &PerspectiveCamera) -> Result<()> {
+        unsafe {
+            graphics.bind_image_sampler(
+                &camera.get_descriptor_set(),
+                &self.texture_sampler,
+                &self.texture,
+                1,
+            )
+        };
         Ok(())
     }
 }
@@ -69,7 +86,7 @@ impl<'a> MeshBuilder<'a> {
 }
 
 impl MeshBuilder<'_> {
-    pub fn build(&self, graphics: &Graphics) -> Result<Mesh> {
+    pub fn build(&self, graphics: &Graphics, camera: &PerspectiveCamera) -> Result<Mesh> {
         let cpu_mesh = graphics.load(&self.mesh_path);
 
         // discard all but the first mesh
@@ -81,12 +98,23 @@ impl MeshBuilder<'_> {
 
         let texture = Image::load(&self.texture_path)?;
         let loaded_texture = unsafe { graphics.load_texture_to_gpu(&texture)? };
+        let texture_sampler = unsafe { graphics.create_image_sampler()? };
+
+        unsafe {
+            graphics.bind_image_sampler(
+                &camera.get_descriptor_set(),
+                &texture_sampler,
+                &loaded_texture,
+                1,
+            )
+        };
 
         Ok(Mesh {
             position,
             rotation,
             gpu_mesh,
             texture: loaded_texture,
+            texture_sampler,
         })
     }
 }

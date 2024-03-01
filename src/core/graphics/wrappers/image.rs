@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use log::info;
+use png::ColorType;
 use std::{fs::File, path::Path};
 use vulkanalia::{
     vk::{self, DeviceV1_0, HasBuilder},
@@ -11,17 +12,21 @@ use crate::core::graphics::{
     command_buffers::{begin_single_time_commands, end_single_time_commands},
 };
 
+use super::depth_buffer::get_supported_format;
+
 pub struct Image {
     width: u32,
     height: u32,
     pixels: Vec<u8>, // this is in [r, g, b, a] tuples
+    color_type: ColorType,
 }
 
 impl Image {
     pub fn load(filepath: &Path) -> Result<Self> {
         let image = File::open(filepath)?;
 
-        let decoder = png::Decoder::new(image);
+        let mut decoder = png::Decoder::new(image);
+        decoder.set_transformations(png::Transformations::ALPHA);
 
         let mut reader = decoder.read_info()?;
 
@@ -31,10 +36,20 @@ impl Image {
         let mut pixels = vec![0; reader.output_buffer_size()];
         reader.next_frame(&mut pixels)?;
 
+        let mut color_type = reader.info().color_type;
+        if color_type == ColorType::Rgb {
+            color_type = ColorType::Rgba;
+        }
+        info!(
+            "Reading image from path {:?} with color type {:?} size {} width {} height {}",
+            filepath, color_type, size, width, height,
+        );
+
         Ok(Image {
             width,
             height,
             pixels,
+            color_type,
         })
     }
 }
@@ -83,14 +98,24 @@ impl LoadedImage {
 
         device.unmap_memory(staging_buffer_memory);
 
+        let tiling = vk::ImageTiling::OPTIMAL;
+
+        let color_format = get_supported_color_format(
+            instance,
+            physical_device,
+            image.color_type,
+            tiling,
+            vk::FormatFeatureFlags::TRANSFER_DST | vk::FormatFeatureFlags::SAMPLED_IMAGE,
+        )?;
+
         let (texture_image, texture_image_memory) = create_vk_image(
             instance,
             device,
             physical_device,
             image.width,
             image.height,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageTiling::OPTIMAL,
+            color_format,
+            tiling,
             vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
@@ -100,7 +125,7 @@ impl LoadedImage {
             graphics_queue,
             command_pool,
             texture_image,
-            vk::Format::R8G8B8A8_SRGB,
+            color_format,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         )?;
@@ -120,7 +145,7 @@ impl LoadedImage {
             graphics_queue,
             command_pool,
             texture_image,
-            vk::Format::R8G8B8A8_SRGB,
+            color_format,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         )?;
@@ -131,7 +156,7 @@ impl LoadedImage {
         let texture_image_view = create_image_view(
             device,
             texture_image,
-            vk::Format::R8G8B8A8_SRGB,
+            color_format,
             vk::ImageAspectFlags::COLOR,
         )?;
 
@@ -167,6 +192,7 @@ pub unsafe fn create_vk_image(
             height,
             depth: 1,
         })
+        .image_type(vk::ImageType::_2D)
         .mip_levels(1)
         .array_layers(1)
         .format(format)
@@ -339,4 +365,30 @@ pub unsafe fn create_image_view(
     let image_view = device.create_image_view(&info, None)?;
 
     Ok(image_view)
+}
+
+unsafe fn get_supported_color_format(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    color_type: ColorType,
+    tiling: vk::ImageTiling,
+    features: vk::FormatFeatureFlags,
+) -> Result<vk::Format> {
+    let candidates: &[vk::Format] = match color_type {
+        ColorType::Rgb => &[
+            vk::Format::R8G8B8_SRGB,
+            vk::Format::R8G8B8_SINT,
+            vk::Format::R8G8B8_SNORM,
+            vk::Format::R8G8B8_SSCALED,
+        ],
+        ColorType::Rgba => &[
+            vk::Format::R8G8B8A8_SRGB,
+            vk::Format::R8G8B8A8_SINT,
+            vk::Format::R8G8B8A8_SNORM,
+            vk::Format::R8G8B8A8_SSCALED,
+        ],
+        _ => return Err(anyhow!("Color type {:?} is not supported", color_type)),
+    };
+
+    get_supported_format(instance, physical_device, candidates, tiling, features)
 }

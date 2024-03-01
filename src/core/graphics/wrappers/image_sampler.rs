@@ -45,27 +45,27 @@ pub unsafe fn create_image_sampler(device: &Device) -> Result<vk::Sampler> {
     Ok(texture_sampler)
 }
 
-pub unsafe fn bind_sampler_to_descriptor_sets(device: &Device, sampler: &ImageSampler, image: &LoadedImage, descriptor_sets: &[vk::DescriptorSet], binding: u32) {
-    descriptor_sets
-        .iter()
-        .for_each(|descriptor_set| {
-            let info = vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(image.get_image_view())
-                .sampler(sampler.sampler);
+pub unsafe fn bind_sampler_to_descriptor_sets(
+    device: &Device,
+    sampler: &ImageSampler,
+    image: &LoadedImage,
+    descriptor_sets: &[vk::DescriptorSet],
+    binding: u32,
+) {
+    descriptor_sets.iter().for_each(|descriptor_set| {
+        let info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(image.get_image_view())
+            .sampler(sampler.sampler);
 
-            let image_info = &[info];
-            let sampler_write = vk::WriteDescriptorSet::builder()
-                .dst_set(descriptor_set.clone())
-                .dst_binding(binding)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(image_info);
+        let image_info = &[info];
+        let sampler_write = vk::WriteDescriptorSet::builder()
+            .dst_set(descriptor_set.clone())
+            .dst_binding(binding)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(image_info);
 
-            device.update_descriptor_sets(
-                &[sampler_write],
-                &[] as &[vk::CopyDescriptorSet],
-            );
-        });
-        
+        device.update_descriptor_sets(&[sampler_write], &[] as &[vk::CopyDescriptorSet]);
+    });
 }

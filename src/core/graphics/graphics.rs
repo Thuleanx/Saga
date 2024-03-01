@@ -1,3 +1,12 @@
+use super::wrappers::{bind_sampler_to_descriptor_sets, DepthBuffer};
+use super::{
+    command_buffers::{self, record_command_buffers},
+    descriptor, framebuffer, instance, logical_device, physical_device, pipeline,
+    swapchain::{self, Swapchain},
+    sync_objects::GraphicsBarriers,
+    validation_layers, window_surface,
+    wrappers::{uniform_buffer, IndexBuffer, Vertex, VertexBuffer},
+};
 use crate::core::{config::MAX_FRAMES_IN_FLIGHT, graphics::renderpass};
 use anyhow::{anyhow, Result};
 use cgmath::{vec2, vec3};
@@ -10,22 +19,12 @@ use vulkanalia::{
     vk::{DebugUtilsMessengerEXT, KhrSwapchainExtension},
 };
 use winit::window::Window;
-use super::wrappers::DepthBuffer;
-use super::{
-    command_buffers::{self, record_command_buffers},
-    descriptor, framebuffer, instance, logical_device, physical_device, pipeline,
-    swapchain::{self, Swapchain},
-    sync_objects::GraphicsBarriers,
-    validation_layers, window_surface,
-    wrappers::{uniform_buffer, IndexBuffer, Vertex, VertexBuffer},
-};
-use log::*;
 
 type Vec3 = cgmath::Vector3<f32>;
 type Vec2 = cgmath::Vector2<f32>;
 type Index = u16;
 
-pub use super::wrappers::{Image, LoadedImage};
+pub use super::wrappers::{Image, ImageSampler, LoadedImage};
 pub use uniform_buffer::UniformBufferSeries;
 
 pub struct CPUMesh {
@@ -606,6 +605,15 @@ impl Graphics {
         Ok(())
     }
 
+    pub unsafe fn unload_sampler_from_gpu(&self, image_sampler: &ImageSampler) -> Result<()> {
+        image_sampler.destroy(&self.device);
+        Ok(())
+    }
+
+    pub unsafe fn create_image_sampler(&self) -> Result<ImageSampler> {
+        ImageSampler::create(&self.device)
+    }
+
     pub unsafe fn create_uniform_buffer_series<T>(&self) -> Result<UniformBufferSeries> {
         uniform_buffer::create_series::<T>(
             &self.instance,
@@ -644,6 +652,22 @@ impl Graphics {
                 &[],
             );
         }
+    }
+
+    pub unsafe fn bind_image_sampler(
+        &self,
+        descriptor_sets: &[vk::DescriptorSet],
+        sampler: &ImageSampler,
+        image: &LoadedImage,
+        binding: u32,
+    ) {
+        bind_sampler_to_descriptor_sets(
+            &self.device,
+            sampler,
+            image,
+            descriptor_sets,
+            binding,
+        );
     }
 
     pub unsafe fn destroy_uniform_buffer_series(&self, uniform_buffers: &UniformBufferSeries) {
