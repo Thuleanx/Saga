@@ -134,15 +134,16 @@ fn main() -> Result<()> {
 
                 unsafe { 
                     match graphics.end_render(&window, image_index) {
-                        Ok(true) => {},
+                        Ok(true) => {
+                            should_recreate_swapchain = true;
+                        },
                         Err(e) => panic!("{}", e),
                         Ok(false) => {
-                            should_recreate_swapchain = true;
                         }
                     }
                 }
             },
-            Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
+            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => {
                 if size.width == 0 || size.height == 0 {
                     minimized = true;
                 } else {
@@ -176,6 +177,10 @@ fn main() -> Result<()> {
                 graphics.free_command_buffers();
                 camera.before_swapchain_recreate(&graphics).unwrap(); 
                 graphics.recreate_swapchain(&window).unwrap();
+
+                let extent = graphics.get_swapchain_extent();
+                camera.set_width(extent.width);
+                camera.set_height(extent.height);
                 camera.after_swapchain_recreate(&graphics).unwrap(); 
                 mesh.after_swapchain_recreate(&graphics, &camera).unwrap();
                 graphics.record_command_buffers(|graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| {

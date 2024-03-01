@@ -1,6 +1,7 @@
 use crate::core::graphics::{Graphics, UniformBufferSeries};
 use anyhow::Result;
-use cgmath::{point3, vec3, Deg, Matrix, Matrix4, One, Transform};
+use cgmath::{point3, vec3, Deg, Rad, Matrix, Matrix4, One, Transform};
+use log::info;
 
 use super::{
     common_traits::{HasPosition, HasRotation},
@@ -314,13 +315,16 @@ impl Camera for PerspectiveCamera {
         // where the forward direction is the direction that the camera
         // fulstrum captures, and the up direction is the downwards camera direction
         let intermediate_matrix: Mat4 = Mat4::new(
-            1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 
+            0.0, -1.0, 0.0, 0.0, 
+            0.0, 0.0, -1.0, 0.0, 
+            0.0, 0.0, 0.0, 1.0,
         );
 
         let inverse_tan_half_fov: f32 = 1.0 / (self.field_of_view / 2.0).tan();
         let inverse_aspect_ratio: f32 = match self.height {
             0 => 0.0 as f32,
-            _ => (self.width as f32) / (self.height as f32),
+            _ => (self.height as f32) / (self.width as f32),
         };
 
         let projection_matrix_c0r0: f32 = inverse_tan_half_fov * inverse_aspect_ratio;
@@ -360,5 +364,39 @@ impl Camera for PerspectiveCamera {
         );
 
         projection_matrix * intermediate_matrix
+
+        // let correction = Mat4::new(
+        //     1.0,
+        //     0.0,
+        //     0.0,
+        //     0.0,
+        //     // We're also flipping the Y-axis with this line's `-1.0`.
+        //     0.0,
+        //     -1.0,
+        //     0.0,
+        //     0.0,
+        //     0.0,
+        //     0.0,
+        //     1.0 / 2.0,
+        //     0.0,
+        //     0.0,
+        //     0.0,
+        //     1.0 / 2.0,
+        //     1.0,
+        // );
+
+        // let proj = correction
+        //     * cgmath::perspective(
+        //         Radian(self.field_of_view),
+        //         self.width as f32 / self.height as f32,
+        //         self.near_plane_distance,
+        //         self.far_plane_distance,
+        //     );
+
+        // proj
+
+        // This line should be deleted because we're now accomplishing the Y-axis flip
+        // using the new correction matrix.
+        // proj[1][1] *= -1.0;
     }
 }

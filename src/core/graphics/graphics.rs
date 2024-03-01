@@ -10,7 +10,7 @@ use super::{
 use crate::core::{config::MAX_FRAMES_IN_FLIGHT, graphics::renderpass};
 use anyhow::{anyhow, Result};
 use cgmath::{vec2, vec3};
-use log::info;
+use log::{info, trace};
 use std::{fmt::Debug, path::Path, time::Instant};
 use tobj::{self};
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
@@ -262,6 +262,10 @@ impl Graphics {
         &self.device
     }
 
+    pub fn get_swapchain_extent(&self) -> vk::Extent2D {
+        self.swapchain.get_extent()
+    }
+
     pub unsafe fn record_command_buffers<F>(&self, record_function: F) -> Result<()>
     where
         F: Fn(&Self, vk::CommandBuffer, usize) -> (),
@@ -310,7 +314,8 @@ impl Graphics {
         let image_index = match result {
             Ok((image_index, _)) => image_index as usize,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
-                return StartRenderResult::ShouldRecreateSwapchain
+                trace!("Image index grab error");
+                return StartRenderResult::ShouldRecreateSwapchain;
             }
             Err(e) => return StartRenderResult::Normal(Err(anyhow!(e))),
         };
@@ -367,6 +372,12 @@ impl Graphics {
 
         let should_recreate_swapchain = self.resized || present_queue_changed;
         if should_recreate_swapchain {
+            trace!(
+                "Swapchain recreation queued resized: {} suboptimal {} out of date {}",
+                self.resized,
+                result == Ok(vk::SuccessCode::SUBOPTIMAL_KHR),
+                result == Err(vk::ErrorCode::OUT_OF_DATE_KHR)
+            );
             self.resized = false;
         } else if let Err(e) = result {
             return Err(anyhow!(e));
@@ -661,13 +672,7 @@ impl Graphics {
         image: &LoadedImage,
         binding: u32,
     ) {
-        bind_sampler_to_descriptor_sets(
-            &self.device,
-            sampler,
-            image,
-            descriptor_sets,
-            binding,
-        );
+        bind_sampler_to_descriptor_sets(&self.device, sampler, image, descriptor_sets, binding);
     }
 
     pub unsafe fn destroy_uniform_buffer_series(&self, uniform_buffers: &UniformBufferSeries) {
