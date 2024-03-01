@@ -530,7 +530,7 @@ impl Graphics {
                     mesh.positions[3 * v + 2],
                 );
 
-                let uv: Vec2 = vec2(mesh.texcoords[2 * v], mesh.texcoords[2 * v + 1]);
+                let uv: Vec2 = vec2(mesh.texcoords[2 * v], 1.0 - mesh.texcoords[2 * v + 1]);
                 // info!(
                 //     "Vertex pos ({}, {}, {}) ({}, {})",
                 //     pos.x, pos.y, pos.z, uv.x, uv.y
