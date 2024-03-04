@@ -1,3 +1,3 @@
-pub mod component;
-pub mod entity;
-pub mod world;
+mod component;
+mod entity;
+mod world;

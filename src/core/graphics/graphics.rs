@@ -75,14 +75,7 @@ impl GPUMesh {
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum GraphicsEvent {
-    Initialize,
-    SwapchainDestroy,
-    SwapchainRecreate,
-    Destroy,
-}
-
+#[derive(bevy_ecs::system::Resource)]
 pub struct Graphics {
     instance: Instance,
     entry: Entry,
@@ -99,7 +92,9 @@ pub struct Graphics {
 
     graphics_barriers: GraphicsBarriers,
     descriptor_set_layout: vk::DescriptorSetLayout,
+
     descriptor_pool: descriptor::Pool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
 
     // on swapchain
     swapchain: Swapchain,
@@ -193,13 +188,6 @@ impl Graphics {
             )?
         };
         let graphics_barriers = GraphicsBarriers::new(&device, swapchain.get_images())?;
-        let command_buffers = unsafe {
-            command_buffers::allocate_command_buffers(
-                &device,
-                command_pool,
-                swapchain.get_length() as u32,
-            )?
-        };
 
         let descriptor_pool = unsafe {
             descriptor::pool::create(
@@ -214,6 +202,23 @@ impl Graphics {
                         descriptor_count: swapchain.get_length() as u32,
                     },
                 ],
+                swapchain.get_length() as u32,
+            )?
+        };
+
+        let descriptor_sets: Vec<vk::DescriptorSet> = unsafe {
+            descriptor::set::create(
+                &device,
+                &descriptor_pool,
+                descriptor_set_layout,
+                swapchain.get_length(),
+            )?
+        };
+
+        let command_buffers = unsafe {
+            command_buffers::allocate_command_buffers(
+                &device,
+                command_pool,
                 swapchain.get_length() as u32,
             )?
         };
@@ -236,6 +241,7 @@ impl Graphics {
             graphics_barriers,
             descriptor_set_layout,
             descriptor_pool,
+            descriptor_sets,
             swapchain,
             depth_buffer,
             pipeline,
@@ -440,13 +446,6 @@ impl Graphics {
                     self.swapchain.get_extent(),
                 )?
             };
-            self.command_buffers = unsafe {
-                command_buffers::allocate_command_buffers(
-                    &self.device,
-                    self.command_pool,
-                    self.swapchain.get_length() as u32,
-                )?
-            };
         }
 
         Ok(())
@@ -463,10 +462,6 @@ impl Graphics {
     pub unsafe fn free_command_buffers(&self) {
         self.device
             .free_command_buffers(self.command_pool, &self.command_buffers);
-    }
-
-    pub unsafe fn free_descriptor_sets(&self, descriptor_sets: &[vk::DescriptorSet]) -> Result<()> {
-        descriptor::set::free(&self.device, self.descriptor_pool, descriptor_sets)
     }
 
     unsafe fn destroy_swapchain(&mut self) {
@@ -665,6 +660,23 @@ impl Graphics {
         }
     }
 
+    pub unsafe fn bind_descriptor_set_indexed(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        index: usize,
+    ) {
+        unsafe {
+            self.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline_layout,
+                0,
+                &[self.descriptor_sets[index]],
+                &[],
+            );
+        }
+    }
+
     pub unsafe fn bind_image_sampler(
         &self,
         descriptor_sets: &[vk::DescriptorSet],
@@ -699,5 +711,207 @@ impl Graphics {
         binding: u32,
     ) {
         uniform_buffers.bind_to_descriptor_sets::<T>(&self.device, descriptor_sets, binding)
+    }
+}
+
+pub mod graphics_utility {
+    use anyhow::Result;
+    use std::{fmt::Debug, path::Path};
+
+    use crate::core::graphics::{
+        graphics::Index,
+        wrappers::{
+            self, bind_sampler_to_descriptor_sets, uniform_buffer, IndexBuffer, Vertex,
+            VertexBuffer,
+        },
+    };
+
+    use super::{
+        CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
+    };
+
+    pub unsafe fn bind_image_sampler(
+        graphics: &Graphics,
+        sampler: &ImageSampler,
+        image: &LoadedImage,
+        binding: u32,
+    ) {
+        log::info!("Image sampler bound");
+        wrappers::bind_sampler_to_descriptor_sets(
+            &graphics.device,
+            &sampler,
+            &image,
+            &graphics.descriptor_sets,
+            binding,
+        );
+    }
+
+    impl UniformBufferSeries {
+        pub unsafe fn create_from_graphics<T>(graphics: &Graphics) -> Result<Self> {
+            log::info!("Create uniform buffer series");
+            uniform_buffer::create_series::<T>(
+                &graphics.instance,
+                &graphics.device,
+                graphics.physical_device,
+                graphics.swapchain.get_length(),
+            )
+        }
+
+        pub unsafe fn bind_to_graphics<T>(&self, graphics: &Graphics, binding: u32) {
+            log::info!("Bind uniform buffer series");
+            self.bind_to_descriptor_sets::<T>(&graphics.device, &graphics.descriptor_sets, binding)
+        }
+
+        pub unsafe fn destroy_uniform_buffer_series(&self, graphics: &Graphics) {
+            log::info!("Destroyed uniform buffer series");
+            uniform_buffer::destroy_series(&graphics.device, self);
+        }
+    }
+
+    impl CPUMesh {
+        pub unsafe fn load_from_obj<P>(graphics: &Graphics, path: P) -> Vec<Self>
+        where
+            P: AsRef<Path> + Debug,
+        {
+            let loaded_obj_result = tobj::load_obj(path.as_ref(), &tobj::GPU_LOAD_OPTIONS);
+
+            log::info!("Loading mesh at {:?}", path);
+
+            let error_message =
+                std::format!("Failed to load Obj file: {}", path.as_ref().display());
+            let (models, materials) = loaded_obj_result.expect(&error_message);
+
+            let mut results: Vec<CPUMesh> = vec![];
+
+            for (model_index, model) in models.iter().enumerate() {
+                let mesh = &model.mesh;
+
+                let mut vertices: Vec<Vertex> = vec![];
+                let mut indices: Vec<Index> = vec![];
+
+                log::info!(
+                    "Mesh has {} faces {} indices",
+                    mesh.face_arities.len(),
+                    mesh.indices.len()
+                );
+
+                static INDICES_PER_FACE: usize = 3;
+
+                for face in 0..mesh.indices.len() / INDICES_PER_FACE {
+                    let face_start = face * INDICES_PER_FACE;
+                    let face_end = face_start + INDICES_PER_FACE;
+                    for index in mesh.indices[face_start..face_end].iter() {
+                        indices.push((*index) as Index);
+                    }
+                }
+
+                for v in 0..mesh.positions.len() / 3 {
+                    let pos = cgmath::vec3(
+                        mesh.positions[3 * v],
+                        mesh.positions[3 * v + 1],
+                        mesh.positions[3 * v + 2],
+                    );
+
+                    let uv = cgmath::vec2(mesh.texcoords[2 * v], 1.0 - mesh.texcoords[2 * v + 1]);
+
+                    vertices.push(Vertex::new(pos, uv));
+                }
+
+                log::info!(
+                    "Loaded mesh with {} vertices and {} faces",
+                    vertices.len(),
+                    indices.len() / 3
+                );
+
+                results.push(CPUMesh { vertices, indices });
+            }
+
+            results
+        }
+    }
+
+    impl GPUMesh {
+        pub unsafe fn create(graphics: &Graphics, mesh: &CPUMesh) -> Result<Self> {
+            log::info!("GPU mesh create");
+
+            let vertex_buffer = VertexBuffer::create(
+                &graphics.instance,
+                &graphics.device,
+                graphics.physical_device,
+                graphics.command_pool,
+                graphics.graphics_queue,
+                &mesh.vertices,
+            )?;
+
+            let index_buffer = IndexBuffer::create(
+                &graphics.instance,
+                &graphics.device,
+                graphics.physical_device,
+                graphics.command_pool,
+                graphics.graphics_queue,
+                &mesh.indices,
+            )?;
+
+            let triangles_count: usize = mesh.indices.len() / 3;
+
+            Ok(Self {
+                triangles_count,
+                vertex_buffer,
+                index_buffer,
+            })
+        }
+
+        pub unsafe fn destroy(&self, graphics: &Graphics) {
+            log::info!("Destroy GPU Mesh");
+            VertexBuffer::destroy(self.vertex_buffer, &graphics.device);
+            IndexBuffer::destroy(self.index_buffer, &graphics.device);
+        }
+    }
+
+    impl LoadedImage {
+        pub unsafe fn create(graphics: &Graphics, image: &Image) -> Result<Self> {
+            log::info!("Load image to memory");
+            LoadedImage::load_into_memory(
+                &image,
+                &graphics.instance,
+                &graphics.device,
+                graphics.physical_device,
+                graphics.graphics_queue,
+                graphics.command_pool,
+            )
+        }
+
+        pub unsafe fn destroy_with_graphics(&self, graphics: &Graphics) {
+            log::info!("Destroy image");
+            self.destroy(&graphics.device)
+        }
+    }
+
+    impl ImageSampler {
+        pub unsafe fn create_from_graphics(graphics: &Graphics) -> Result<Self> {
+            log::info!("Create sampler");
+            Self::create(&graphics.device)
+        }
+
+        pub unsafe fn bind_image_sampler(
+            &self,
+            graphics: &Graphics,
+            image: &LoadedImage,
+            binding: u32,
+        ) {
+            log::info!("Bind sampler");
+            bind_sampler_to_descriptor_sets(
+                &graphics.device,
+                self,
+                image,
+                &graphics.descriptor_sets,
+                binding,
+            );
+        }
+
+        pub unsafe fn destroy_with_graphics(&self, graphics: &Graphics) {
+            log::info!("Destroy sampler");
+            self.destroy(&graphics.device)
+        }
     }
 }

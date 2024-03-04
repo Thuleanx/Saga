@@ -3,6 +3,7 @@ use vulkanalia::prelude::v1_0::*;
 
 use crate::core::config::MAX_FRAMES_IN_FLIGHT;
 
+#[derive(Clone)]
 pub struct GraphicsBarriers {
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_semaphores: Vec<vk::Semaphore>,

@@ -5,10 +5,17 @@
 DOOM Clone, enemies are abberations.
 
 Essential tasks list
-- [ ] Texture sampling
+- [x] Texture sampling
+- [x] Depth mapping
 - [ ] Set up Bevy
-    - [ ] Set up Bevy app
+    - [x] Set up Bevy app
     - [ ] Setup rendering system
+        - [x] Hook up window manager
+        - [x] Attach camera
+        - [x] Render mesh
+        - [x] Handle swapchain recreation
+        - [ ] Multiple uniform buffers (for model matrix)
+        - [ ] Render multiple meshes
 - [ ] Simple scene setup
 - [ ] Player camera
 - [ ] Player input capture
@@ -37,4 +44,8 @@ Technical improvements
 Polish list
 - [ ] Variable Chromatic Abberation
 - [ ] Screen shake
+
+
+## Architecture
+
 

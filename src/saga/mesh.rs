@@ -23,6 +23,7 @@ pub struct Mesh {
 impl Mesh {
     pub unsafe fn bind(&self, graphics: &Graphics, command_buffer: vk::CommandBuffer) {
         self.gpu_mesh.bind(graphics, command_buffer);
+        // self.texture_sampler.bind_image_sampler(&graphics, &self.texture, 1);
     }
 
     pub unsafe fn draw(&self, graphics: &Graphics, command_buffer: vk::CommandBuffer) {
@@ -33,18 +34,6 @@ impl Mesh {
         graphics.unload_from_gpu(&self.gpu_mesh)?;
         graphics.unload_texture_from_gpu(&self.texture)?;
         graphics.unload_sampler_from_gpu(&self.texture_sampler)?;
-        Ok(())
-    }
-
-    pub unsafe fn after_swapchain_recreate(&self, graphics: &Graphics, camera: &PerspectiveCamera) -> Result<()> {
-        unsafe {
-            graphics.bind_image_sampler(
-                &camera.get_descriptor_set(),
-                &self.texture_sampler,
-                &self.texture,
-                1,
-            )
-        };
         Ok(())
     }
 }
@@ -100,14 +89,10 @@ impl MeshBuilder<'_> {
         let loaded_texture = unsafe { graphics.load_texture_to_gpu(&texture)? };
         let texture_sampler = unsafe { graphics.create_image_sampler()? };
 
+
         unsafe {
-            graphics.bind_image_sampler(
-                &camera.get_descriptor_set(),
-                &texture_sampler,
-                &loaded_texture,
-                1,
-            )
-        };
+            texture_sampler.bind_image_sampler(&graphics, &loaded_texture, 1);
+        }
 
         Ok(Mesh {
             position,

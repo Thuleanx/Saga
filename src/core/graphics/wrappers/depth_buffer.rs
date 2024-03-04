@@ -7,6 +7,7 @@ use crate::core::graphics::swapchain::Swapchain;
 use super::create_image_view;
 use super::image::{create_vk_image, transition_image_layout};
 
+#[derive(Clone)]
 pub struct DepthBuffer {
     image: vk::Image,
     image_memory: vk::DeviceMemory,

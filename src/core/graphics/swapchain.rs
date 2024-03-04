@@ -7,6 +7,7 @@ use winit::window::Window;
 use super::queue_families::QueueFamilyIndices;
 use super::wrappers::create_image_view;
 
+#[derive(Clone)]
 pub struct Swapchain {
     chain: vk::SwapchainKHR,
     format: vk::Format,

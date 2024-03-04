@@ -1,14 +1,11 @@
 use crate::core::graphics::{Graphics, UniformBufferSeries};
 use anyhow::Result;
-use cgmath::{point3, vec3, Deg, Rad, Matrix, Matrix4, One, Transform};
-use log::info;
+use cgmath::{point3, vec3, Deg, Matrix, Matrix4, One, Transform};
 
 use super::{
     common_traits::{HasPosition, HasRotation},
     spectator::Spectator,
 };
-
-use vulkanalia::prelude::v1_0::*;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -76,14 +73,9 @@ pub struct PerspectiveCamera {
     view: Mat4,
     projection: Mat4,
     uniform_buffers: UniformBufferSeries,
-    descriptor_sets: Vec<vk::DescriptorSet>,
 }
 
 impl PerspectiveCamera {
-    pub fn get_descriptor_set(&self) -> Vec<vk::DescriptorSet> {
-        self.descriptor_sets.clone()
-    }
-
     pub fn set_width(&mut self, width: u32) -> () {
         self.width = width;
         self.projection = self.calculate_projection_matrix();
@@ -92,39 +84,6 @@ impl PerspectiveCamera {
     pub fn set_height(&mut self, height: u32) -> () {
         self.height = height;
         self.projection = self.calculate_projection_matrix();
-    }
-
-    pub unsafe fn bind(
-        &self,
-        graphics: &Graphics,
-        command_buffer: vk::CommandBuffer,
-        index: usize,
-    ) {
-        graphics.bind_descriptor_set(command_buffer, self.descriptor_sets[index])
-    }
-
-    pub unsafe fn before_swapchain_recreate(&mut self, graphics: &Graphics) -> Result<()> {
-        graphics.destroy_uniform_buffer_series(&self.uniform_buffers);
-        graphics.free_descriptor_sets(&self.descriptor_sets)?;
-
-        Ok(())
-    }
-
-    pub unsafe fn after_swapchain_recreate(&mut self, graphics: &Graphics) -> Result<()> {
-        self.uniform_buffers =
-            unsafe { graphics.create_uniform_buffer_series::<UniformBufferObject>()? };
-
-        self.descriptor_sets = unsafe { graphics.create_descriptor_sets()? };
-
-        unsafe {
-            graphics.bind_uniform_buffer::<UniformBufferObject>(
-                &self.uniform_buffers,
-                &self.descriptor_sets,
-                0,
-            )
-        }
-
-        Ok(())
     }
 
     pub unsafe fn update_uniform_buffer_series(
@@ -148,7 +107,6 @@ impl PerspectiveCamera {
     pub unsafe fn unload(&self, graphics: &Graphics) -> Result<()> {
         unsafe {
             graphics.destroy_uniform_buffer_series(&self.uniform_buffers);
-            graphics.free_descriptor_sets(&self.descriptor_sets)?;
         }
         Ok(())
     }
@@ -167,7 +125,6 @@ impl Default for PerspectiveCamera {
             view: Mat4::one(),
             projection: Mat4::one(),
             uniform_buffers: UniformBufferSeries::default(),
-            descriptor_sets: vec![],
         }
     }
 }
@@ -231,14 +188,8 @@ impl PerspectiveCameraBuilder {
         let uniform_buffers =
             unsafe { graphics.create_uniform_buffer_series::<UniformBufferObject>()? };
 
-        let descriptor_sets: Vec<vk::DescriptorSet> = unsafe { graphics.create_descriptor_sets()? };
-
         unsafe {
-            graphics.bind_uniform_buffer::<UniformBufferObject>(
-                &uniform_buffers,
-                &descriptor_sets,
-                0,
-            )
+            uniform_buffers.bind_to_graphics::<UniformBufferObject>(&graphics, 0);
         }
 
         let mut builder_result = PerspectiveCamera {
@@ -252,7 +203,6 @@ impl PerspectiveCameraBuilder {
             view: Mat4::one(),
             projection: Mat4::one(),
             uniform_buffers,
-            descriptor_sets,
         };
 
         builder_result.view = builder_result.calculate_view_matrix();
