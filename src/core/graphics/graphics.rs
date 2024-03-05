@@ -94,7 +94,7 @@ pub struct Graphics {
     descriptor_set_layout: vk::DescriptorSetLayout,
 
     descriptor_pool: descriptor::Pool,
-    descriptor_sets: Vec<vk::DescriptorSet>,
+    global_descriptor_sets: Vec<vk::DescriptorSet>,
 
     // on swapchain
     swapchain: Swapchain,
@@ -241,7 +241,7 @@ impl Graphics {
             graphics_barriers,
             descriptor_set_layout,
             descriptor_pool,
-            descriptor_sets,
+            global_descriptor_sets: descriptor_sets,
             swapchain,
             depth_buffer,
             pipeline,
@@ -671,7 +671,7 @@ impl Graphics {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
                 0,
-                &[self.descriptor_sets[index]],
+                &[self.global_descriptor_sets[index]],
                 &[],
             );
         }
@@ -741,7 +741,7 @@ pub mod graphics_utility {
             &graphics.device,
             &sampler,
             &image,
-            &graphics.descriptor_sets,
+            &graphics.global_descriptor_sets,
             binding,
         );
     }
@@ -759,7 +759,7 @@ pub mod graphics_utility {
 
         pub unsafe fn bind_to_graphics<T>(&self, graphics: &Graphics, binding: u32) {
             log::info!("Bind uniform buffer series");
-            self.bind_to_descriptor_sets::<T>(&graphics.device, &graphics.descriptor_sets, binding)
+            self.bind_to_descriptor_sets::<T>(&graphics.device, &graphics.global_descriptor_sets, binding)
         }
 
         pub unsafe fn destroy_uniform_buffer_series(&self, graphics: &Graphics) {
@@ -904,7 +904,7 @@ pub mod graphics_utility {
                 &graphics.device,
                 self,
                 image,
-                &graphics.descriptor_sets,
+                &graphics.global_descriptor_sets,
                 binding,
             );
         }

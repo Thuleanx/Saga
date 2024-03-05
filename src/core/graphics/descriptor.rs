@@ -54,8 +54,10 @@ pub mod pool {
 
     impl Pool {
         pub fn get_pool(&self) -> vk::DescriptorPool { self.pool }
+        pub fn get_size(&self) -> u32 { self.size }
     }
 
+    #[derive(Clone)]
     pub struct PoolDescription {
         pub type_: vk::DescriptorType,
         pub descriptor_count: u32,
@@ -106,21 +108,6 @@ pub mod set {
         descriptor_set_layout: vk::DescriptorSetLayout, 
         number_of_set_layouts: usize,
     ) -> Result<Vec<vk::DescriptorSet>> {
-        _create(
-            device, 
-            descriptor_pool, 
-            descriptor_set_layout, 
-            number_of_set_layouts,
-        )
-    }
-
-    unsafe fn _create(
-        device: &Device, 
-        descriptor_pool: &Pool,
-        descriptor_set_layout: vk::DescriptorSetLayout, 
-        number_of_set_layouts: usize,
-    ) -> Result<Vec<vk::DescriptorSet>> {
-
         let layouts: Vec<vk::DescriptorSetLayout> = 
             vec![descriptor_set_layout; number_of_set_layouts];
         let info = vk::DescriptorSetAllocateInfo::builder()

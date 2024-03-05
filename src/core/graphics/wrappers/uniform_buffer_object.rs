@@ -30,7 +30,7 @@ pub mod uniform_buffer {
             None
         }
 
-        pub fn get_buffers(&self) -> &Vec<vk::Buffer> {
+        pub fn get_buffers(&self) -> &[vk::Buffer] {
             &self.buffers
         }
         pub fn get_buffer_memories(&self) -> &Vec<vk::DeviceMemory> {

@@ -17,6 +17,10 @@ impl ImageSampler {
         Ok(Self { sampler })
     }
 
+    pub fn get_sampler(&self) -> vk::Sampler {
+        self.sampler
+    }
+
     pub unsafe fn destroy(&self, device: &Device) {
         device.destroy_sampler(self.sampler, None);
     }

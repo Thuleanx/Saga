@@ -316,7 +316,7 @@ mod saga_renderer {
     ) {
         let resize_happens = resize_event.read().next().is_some();
         if !resize_happens {
-            ()
+            return;
         }
 
         let size = window.window.inner_size();
@@ -344,12 +344,9 @@ mod saga_renderer {
         unsafe {
             graphics.record_command_buffers(
                 |graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| unsafe {
-                    log::info!("Binding command buffer {}", index);
-
                     graphics.bind_descriptor_set_indexed(command_buffer, index);
 
                     for (mesh, main_texture) in &meshes {
-                        log::info!("Bind draw for mesh");
                         mesh.gpu_mesh.bind(graphics, command_buffer);
                         mesh.gpu_mesh.draw(graphics, command_buffer);
                     }
@@ -363,8 +360,6 @@ mod saga_renderer {
         mut graphics: ResMut<Graphics>,
         camera_query: Query<(&Camera, &CameraRenderingInfo)>,
     ) -> Result<bool> {
-        log::info!("Draw");
-
         let image_index = unsafe {
             match graphics.start_render(&window.window) {
                 StartRenderResult::Normal(Ok(image_index)) => image_index,
@@ -376,8 +371,6 @@ mod saga_renderer {
         };
 
         for (camera, camera_rendering_info) in &camera_query {
-            log::info!("Update camera uniform buffer series");
-
             let time = graphics.get_start_time().elapsed().as_secs_f32();
             let model = Matrix4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0 * time))
                 * Matrix4::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(90.0));
@@ -533,7 +526,6 @@ mod saga_window {
     }
 
     pub fn winit_event_runner(mut app: App) {
-        log::trace!("Event runner");
         let event_loop = EventLoop::new();
 
         init_resources(&mut app, &event_loop).unwrap();
@@ -584,7 +576,7 @@ mod saga_window {
                     is_window_being_destroyed = true;
                     *control_flow = ControlFlow::Exit;
 
-                    log::trace!("Window is being destroyed");
+                    log::info!("[Saga] Window is being destroyed");
 
                     // Run the app and allows AppExit behaviours to run
                     app.world.send_event(AppExit);
@@ -601,14 +593,14 @@ mod saga_window {
                             .unwrap();
                     }
 
-                    log::info!("[Saga] Running cleanup schedule");
+                    log::info!("[Cleanup] Running cleanup schedule");
                     app.world.run_schedule(Cleanup);
 
                     let mut graphics = app.world
                         .get_resource_mut::<Graphics>()
                         .expect("Resource missing: Graphics");
 
-                    log::info!("[Saga] Destroying graphics");
+                    log::info!("[Cleanup] Destroying graphics");
                     graphics.destroy();
                 }
                 _ => {}
