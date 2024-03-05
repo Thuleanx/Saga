@@ -34,7 +34,7 @@ impl DescriptorWriter {
 
         descriptor_sets.iter().for_each(|descriptor_set| {
             self.image_writes.push(ImageWriteInformation {
-                info,
+                info: [info],
                 binding,
                 descriptor_set: descriptor_set.clone(),
             })
