@@ -685,13 +685,14 @@ impl Graphics {
         &self,
         command_buffer: vk::CommandBuffer,
         descriptor_sets: &[vk::DescriptorSet],
+        first_set: u32,
     ) {
         unsafe {
             self.device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
-                0,
+                first_set,
                 descriptor_sets,
                 &[],
             );

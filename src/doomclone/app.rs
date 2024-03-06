@@ -416,13 +416,16 @@ mod saga_renderer {
         unsafe {
             graphics.record_command_buffers(
                 |graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| unsafe {
+                    graphics.bind_descriptor_set(
+                        command_buffer,
+                        &[graphics.global_descriptor_sets[index]],
+                        0,
+                    );
                     for (mesh, main_texture, rendering_info) in &meshes {
                         graphics.bind_descriptor_set(
                             command_buffer,
-                            &[
-                                graphics.global_descriptor_sets[index],
-                                rendering_info.descriptor_sets[index],
-                            ],
+                            &[rendering_info.descriptor_sets[index]],
+                            1,
                         );
                         mesh.gpu_mesh.bind(graphics, command_buffer);
                         mesh.gpu_mesh.draw(graphics, command_buffer);
@@ -442,8 +445,16 @@ mod saga_renderer {
             // let model = Matrix4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0 * time))
             //     * Matrix4::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(90.0));
 
-            position.0 = cgmath::vec3(position.0.x, (3.0*(time + position.0.x)).sin(), position.0.z);
-            rotation.0 = Matrix3::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg((time + position.0.x) * 90.0)).into();
+            position.0 = cgmath::vec3(
+                position.0.x,
+                (3.0 * (time + position.0.x)).sin(),
+                position.0.z,
+            );
+            rotation.0 = Matrix3::from_axis_angle(
+                cgmath::vec3(0.0, 1.0, 0.0),
+                Deg((time + position.0.x) * 90.0),
+            )
+            .into();
         }
     }
 
@@ -742,10 +753,14 @@ mod saga_window {
 
 pub fn construct_app() -> App {
     let mut app = App::new();
-    app.add_plugins((saga_window::WindowPlugin, saga_renderer::Plugin, bevy_time::TimePlugin))
-        .add_systems(bevy_app::Startup, spawn_camera)
-        .add_systems(bevy_app::Startup, spawn_mesh)
-        .add_systems(bevy_app::PostStartup, finalize_descriptors);
+    app.add_plugins((
+        saga_window::WindowPlugin,
+        saga_renderer::Plugin,
+        bevy_time::TimePlugin,
+    ))
+    .add_systems(bevy_app::Startup, spawn_camera)
+    .add_systems(bevy_app::Startup, spawn_mesh)
+    .add_systems(bevy_app::PostStartup, finalize_descriptors);
 
     app
 }
