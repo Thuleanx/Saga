@@ -1,5 +1,3 @@
-pub use uniform_buffer::UniformBufferSeries;
-
 pub mod uniform_buffer {
     use std::mem::size_of;
 

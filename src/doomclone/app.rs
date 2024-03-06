@@ -1,15 +1,17 @@
-use crate::core::graphics::{
-    graphics_utility, CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage,
-    UniformBufferSeries,
+use self::saga_renderer::CameraUniformBufferObject;
+use crate::{
+    core::graphics::{
+        CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
+    },
+    doomclone::app::saga_renderer::MeshUniformBufferObject,
 };
 use bevy_app::App;
 use bevy_ecs::{
     component::Component,
-    system::{Commands, Res},
+    system::{Commands, Res, ResMut},
 };
-use cgmath::{point3, vec3, Angle, Deg, Matrix, Matrix3, Transform, Zero};
-
-use self::saga_renderer::UniformBufferObject;
+use cgmath::{vec3, Angle, Deg, Zero};
+use vulkanalia::prelude::v1_0::*;
 
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
@@ -39,7 +41,7 @@ impl Rotation {
     }
 
     fn right(&self) -> Vec3 {
-        self.0 * vec3(-1.0, 0.0, 0.0)
+        self.0 * vec3(1.0, 0.0, 0.0)
     }
 
     fn up(&self) -> Vec3 {
@@ -164,32 +166,48 @@ struct MainTexture {
     sampler: ImageSampler,
 }
 
-fn spawn_camera(window: Res<saga_window::Window>, graphics: Res<Graphics>, mut commands: Commands) {
+#[derive(Component)]
+struct MeshRenderingInfo {
+    descriptor_sets: Vec<vk::DescriptorSet>,
+    uniform_buffers: UniformBufferSeries,
+}
+
+fn spawn_camera(
+    window: Res<saga_window::Window>,
+    mut graphics: ResMut<Graphics>,
+    mut commands: Commands,
+) {
     log::info!("Spawn camera");
-    let position = Position(vec3(4.0, 4.0, 4.0));
-    let rotation = Rotation(
-        Matrix3::<f32>::look_at_rh(
-            point3(0.0, 0.0, 0.0),
-            point3(2.0, 2.0, 1.1),
-            vec3(0.0, 0.0, 1.0),
-        )
-        .transpose()
-        .into(),
-    );
+    let position = Position(vec3(0.0, 0.0, -20.0));
+    let rotation = Rotation(Quat::zero());
 
     let size = window.window.inner_size();
 
     let uniform_buffers = unsafe {
-        UniformBufferSeries::create_from_graphics::<UniformBufferObject>(&graphics).unwrap()
+        UniformBufferSeries::create_from_graphics::<CameraUniformBufferObject>(&graphics).unwrap()
     };
 
-    unsafe {
-        uniform_buffers.bind_to_graphics::<UniformBufferObject>(&graphics, 0);
-    };
+    uniform_buffers
+        .get_buffers()
+        .iter()
+        .cloned()
+        .enumerate()
+        .for_each(|(index, uniform_buffer)| {
+            let descriptor_set = graphics.global_descriptor_sets[index];
+            let device = graphics.get_device().clone();
+            graphics
+                .descriptor_writer
+                .queue_write_buffers::<CameraUniformBufferObject>(
+                    &device,
+                    uniform_buffer,
+                    &[descriptor_set],
+                    0,
+                )
+        });
 
     let camera = Camera {
         field_of_view: Deg(45.0).into(),
-        far_plane_distance: 10.0,
+        far_plane_distance: 100.0,
         near_plane_distance: 0.1,
         width: size.width,
         height: size.height,
@@ -210,66 +228,114 @@ fn spawn_camera(window: Res<saga_window::Window>, graphics: Res<Graphics>, mut c
     ));
 }
 
-fn spawn_mesh(graphics: Res<Graphics>, mut commands: Commands) {
+fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
     log::info!("Spawn mesh");
 
-    let position = vec3(4.0, 4.0, 4.0);
-    let rotation = Quat::zero();
+    for pos_x in -2..3 {
+        let position = vec3((pos_x as f32) * 3.0, 0.0, 0.0);
+        let rotation = Quat::zero();
 
-    let path_to_obj = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("meshes")
-        .join("Imphat.obj");
-    let path_to_texture = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("meshes")
-        .join("imphat_diffuse.png");
+        let path_to_obj = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("meshes")
+            .join("Imphat.obj");
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("meshes")
+            .join("imphat_diffuse.png");
 
-    let cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
+        let cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
 
-    if cpu_mesh.len() == 0 {
-        log::error!(
-            "Provided obj file at path {:?} yields no object",
-            &path_to_obj
+        if cpu_mesh.len() == 0 {
+            log::error!(
+                "Provided obj file at path {:?} yields no object",
+                &path_to_obj
+            );
+            return;
+        }
+
+        let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh[0]).unwrap() };
+
+        let texture = Image::load(&path_to_texture).unwrap();
+
+        let loaded_texture = unsafe { LoadedImage::create(&graphics, &texture).unwrap() };
+        let texture_sampler = unsafe { ImageSampler::create_from_graphics(&graphics).unwrap() };
+
+        let descriptor_sets = unsafe {
+            let device = graphics.get_device().clone();
+            let set_layout = graphics.mesh_descriptor_set_layout;
+            let swapchain_len = graphics.swapchain.get_length();
+            graphics
+                .mesh_descriptor_allocator
+                .allocate(&device, set_layout, swapchain_len)
+                .unwrap()
+        };
+
+        let uniform_buffers = unsafe {
+            UniformBufferSeries::create_from_graphics::<MeshUniformBufferObject>(&graphics).unwrap()
+        };
+
+        let device = graphics.get_device().clone();
+        graphics.descriptor_writer.queue_write_image(
+            &device,
+            &texture_sampler,
+            &loaded_texture,
+            &descriptor_sets,
+            1,
         );
-        return;
+
+        uniform_buffers
+            .get_buffers()
+            .iter()
+            .cloned()
+            .enumerate()
+            .for_each(|(index, uniform_buffer)| {
+                let device = graphics.get_device().clone();
+                graphics
+                    .descriptor_writer
+                    .queue_write_buffers::<MeshUniformBufferObject>(
+                        &device,
+                        uniform_buffer,
+                        &[descriptor_sets[index]],
+                        0,
+                    );
+            });
+
+        let spawn = commands.spawn((
+            Position(position),
+            Rotation(rotation),
+            Mesh { gpu_mesh },
+            MainTexture {
+                texture: loaded_texture,
+                sampler: texture_sampler,
+            },
+            MeshRenderingInfo {
+                uniform_buffers,
+                descriptor_sets,
+            },
+        ));
     }
+}
 
-    let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh[0]).unwrap() };
-
-    let texture = Image::load(&path_to_texture).unwrap();
-
-    let loaded_texture = unsafe { LoadedImage::create(&graphics, &texture).unwrap() };
-    let texture_sampler = unsafe { ImageSampler::create_from_graphics(&graphics).unwrap() };
-
-    unsafe {
-        graphics_utility::bind_image_sampler(&graphics, &texture_sampler, &loaded_texture, 1);
-    }
-
-    let spawn = commands.spawn((
-        Position(position),
-        Rotation(rotation),
-        Mesh { gpu_mesh },
-        MainTexture {
-            texture: loaded_texture,
-            sampler: texture_sampler,
-        },
-    ));
+fn finalize_descriptors(graphics: ResMut<Graphics>) {
+    graphics.descriptor_writer.write(graphics.get_device());
 }
 
 mod saga_renderer {
     use anyhow::Result;
     use bevy_app::Plugin as BevyPlugin;
-    use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
     use bevy_ecs::system::ResMut;
-    use cgmath::{vec3, Deg, Matrix4};
+    use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
+    use bevy_time::Time;
+    use cgmath::{Deg, Matrix3, Matrix4};
     use vulkanalia::vk;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
 
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
+    use super::{MeshRenderingInfo, Position, Rotation};
 
     pub struct Plugin;
 
@@ -278,7 +344,7 @@ mod saga_renderer {
             app.add_event::<Resize>()
                 .init_schedule(Cleanup)
                 .add_systems(
-                    bevy_app::Update,
+                    bevy_app::Last,
                     draw.pipe(handle_swapchain_recreate)
                         .pipe(recreate_swapchain)
                         .pipe(log_error_result),
@@ -289,7 +355,8 @@ mod saga_renderer {
                     bevy_app::PostStartup,
                     build_command_buffer.pipe(log_error_result),
                 )
-                .add_systems(bevy_app::Update, camera_on_screen_resize);
+                .add_systems(bevy_app::Update, camera_on_screen_resize)
+                .add_systems(bevy_app::Update, animate_meshes);
         }
     }
 
@@ -303,10 +370,15 @@ mod saga_renderer {
 
     #[repr(C)]
     #[derive(Copy, Clone, Debug)]
-    pub struct UniformBufferObject {
-        pub model: Matrix4<f32>,
+    pub struct CameraUniformBufferObject {
         pub view: Matrix4<f32>,
         pub proj: Matrix4<f32>,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct MeshUniformBufferObject {
+        pub model: Matrix4<f32>,
     }
 
     fn camera_on_screen_resize(
@@ -331,22 +403,27 @@ mod saga_renderer {
 
     fn build_command_buffer(
         graphics: Res<Graphics>,
-        meshes: Query<(&Mesh, &MainTexture)>,
+        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) -> Result<()> {
         build_command_buffer_from_graphics(&graphics, meshes)
     }
 
     fn build_command_buffer_from_graphics(
         graphics: &Graphics,
-        meshes: Query<(&Mesh, &MainTexture)>,
+        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) -> Result<()> {
         log::info!("Build command buffer");
         unsafe {
             graphics.record_command_buffers(
                 |graphics: &Graphics, command_buffer: vk::CommandBuffer, index: usize| unsafe {
-                    graphics.bind_descriptor_set_indexed(command_buffer, index);
-
-                    for (mesh, main_texture) in &meshes {
+                    for (mesh, main_texture, rendering_info) in &meshes {
+                        graphics.bind_descriptor_set(
+                            command_buffer,
+                            &[
+                                graphics.global_descriptor_sets[index],
+                                rendering_info.descriptor_sets[index],
+                            ],
+                        );
                         mesh.gpu_mesh.bind(graphics, command_buffer);
                         mesh.gpu_mesh.draw(graphics, command_buffer);
                     }
@@ -355,10 +432,75 @@ mod saga_renderer {
         }
     }
 
+    fn animate_meshes(
+        time: Res<Time>,
+        mut mesh_query: Query<(&mut Position, &mut Rotation, &Mesh)>,
+    ) {
+        for (mut position, mut rotation, mesh) in mesh_query.iter_mut() {
+            let time = time.elapsed().as_secs_f32();
+            // let time = graphics.get_start_time().elapsed().as_secs_f32();
+            // let model = Matrix4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0 * time))
+            //     * Matrix4::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(90.0));
+
+            position.0 = cgmath::vec3(position.0.x, (3.0*(time + position.0.x)).sin(), position.0.z);
+            rotation.0 = Matrix3::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg((time + position.0.x) * 90.0)).into();
+        }
+    }
+
+    fn update_mesh_transform_information(
+        graphics: &ResMut<Graphics>,
+        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo)>,
+    ) -> Result<()> {
+        for (position, rotation, rendering_info) in mesh_query.iter() {
+            let rotation_matrix = Matrix4::from(Matrix3::from(rotation.0));
+            let translation_matrix = Matrix4::from_translation(position.0);
+            let model = translation_matrix * rotation_matrix;
+
+            let ubo = MeshUniformBufferObject { model };
+
+            let number_of_buffers_to_update = rendering_info.uniform_buffers.get_buffers().len();
+            for index in 0..number_of_buffers_to_update {
+                unsafe {
+                    graphics.update_uniform_buffer_series(
+                        &rendering_info.uniform_buffers,
+                        index,
+                        &ubo,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_camera_transform_information(
+        graphics: &ResMut<Graphics>,
+        camera_query: Query<(&Camera, &CameraRenderingInfo)>,
+        image_index: usize,
+    ) -> Result<()> {
+        for (camera, camera_rendering_info) in camera_query.iter() {
+            let view = camera_rendering_info.view;
+            let proj = camera_rendering_info.projection;
+
+            let ubo = CameraUniformBufferObject { view, proj };
+
+            unsafe {
+                graphics.update_uniform_buffer_series(
+                    &camera_rendering_info.uniform_buffers,
+                    image_index,
+                    &ubo,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn draw(
         window: Res<Window>,
         mut graphics: ResMut<Graphics>,
         camera_query: Query<(&Camera, &CameraRenderingInfo)>,
+        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo)>,
     ) -> Result<bool> {
         let image_index = unsafe {
             match graphics.start_render(&window.window) {
@@ -370,24 +512,8 @@ mod saga_renderer {
             }
         };
 
-        for (camera, camera_rendering_info) in &camera_query {
-            let time = graphics.get_start_time().elapsed().as_secs_f32();
-            let model = Matrix4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0 * time))
-                * Matrix4::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(90.0));
-
-            let view = camera_rendering_info.view;
-            let proj = camera_rendering_info.projection;
-
-            let ubo = UniformBufferObject { model, view, proj };
-
-            unsafe {
-                graphics.update_uniform_buffer_series(
-                    &camera_rendering_info.uniform_buffers,
-                    image_index,
-                    &ubo,
-                )?;
-            }
-        }
+        update_mesh_transform_information(&graphics, mesh_query)?;
+        update_camera_transform_information(&graphics, camera_query, image_index)?;
 
         unsafe {
             let should_recreate_swapchain = graphics.end_render(&window.window, image_index);
@@ -410,7 +536,7 @@ mod saga_renderer {
         In(should_recreate_swapchain): In<bool>,
         window: Res<Window>,
         mut graphics: ResMut<Graphics>,
-        meshes: Query<(&Mesh, &MainTexture)>,
+        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) -> Result<()> {
         if !should_recreate_swapchain {
             return Ok(());
@@ -445,13 +571,16 @@ mod saga_renderer {
 
     fn cleanup_meshes(
         graphics: Res<Graphics>,
-        meshes: Query<(&Mesh, &MainTexture)>,
+        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) {
         log::info!("[Saga] Cleaning up all meshes");
         let graphics = graphics.as_ref();
-        for (mesh, main_texture) in &meshes {
+        for (mesh, main_texture, rendering_info) in &meshes {
             log::info!("Cleanup...");
             unsafe {
+                rendering_info
+                    .uniform_buffers
+                    .destroy_uniform_buffer_series(&graphics);
                 mesh.gpu_mesh.destroy(&graphics);
                 main_texture.texture.destroy_with_graphics(&graphics);
                 main_texture.sampler.destroy_with_graphics(&graphics);
@@ -459,10 +588,7 @@ mod saga_renderer {
         }
     }
 
-    fn cleanup_camera(
-        graphics: Res<Graphics>,
-        cameras: Query<&CameraRenderingInfo>,
-    ) {
+    fn cleanup_camera(graphics: Res<Graphics>, cameras: Query<&CameraRenderingInfo>) {
         log::info!("[Saga] Cleaning up all cameras");
         let graphics = graphics.as_ref();
         for camera_rendering_info in &cameras {
@@ -477,7 +603,10 @@ mod saga_renderer {
 }
 
 mod saga_window {
-    use crate::{core::graphics::Graphics, doomclone::app::saga_renderer::{Cleanup, Resize}};
+    use crate::{
+        core::graphics::Graphics,
+        doomclone::app::saga_renderer::{Cleanup, Resize},
+    };
     use anyhow::Result;
     use bevy_app::{App, AppExit, Plugin};
     use bevy_ecs::system::Resource;
@@ -562,7 +691,8 @@ mod saga_window {
 
                         app.world.send_event(Resize);
 
-                        let mut graphics = app.world
+                        let mut graphics = app
+                            .world
                             .get_resource_mut::<Graphics>()
                             .expect("Resource missing: Graphics");
                         graphics.trigger_resize();
@@ -596,7 +726,8 @@ mod saga_window {
                     log::info!("[Cleanup] Running cleanup schedule");
                     app.world.run_schedule(Cleanup);
 
-                    let mut graphics = app.world
+                    let mut graphics = app
+                        .world
                         .get_resource_mut::<Graphics>()
                         .expect("Resource missing: Graphics");
 
@@ -611,9 +742,10 @@ mod saga_window {
 
 pub fn construct_app() -> App {
     let mut app = App::new();
-    app.add_plugins((saga_window::WindowPlugin, saga_renderer::Plugin))
+    app.add_plugins((saga_window::WindowPlugin, saga_renderer::Plugin, bevy_time::TimePlugin))
         .add_systems(bevy_app::Startup, spawn_camera)
-        .add_systems(bevy_app::Startup, spawn_mesh);
+        .add_systems(bevy_app::Startup, spawn_mesh)
+        .add_systems(bevy_app::PostStartup, finalize_descriptors);
 
     app
 }

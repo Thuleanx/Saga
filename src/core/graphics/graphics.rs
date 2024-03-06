@@ -1,3 +1,5 @@
+use super::abstraction::descriptor_allocator::DescriptorAllocator;
+use super::abstraction::descriptor_writer::DescriptorWriter;
 use super::wrappers::{bind_sampler_to_descriptor_sets, DepthBuffer};
 use super::{
     command_buffers::{self, record_command_buffers},
@@ -53,8 +55,7 @@ impl GPUMesh {
 
         unsafe {
             self.vertex_buffer
-                .bind(device, command_buffer, first_binding, memory_offset);
-        }
+                .bind(device, command_buffer, first_binding, memory_offset); }
         unsafe {
             self.index_buffer
                 .bind(device, command_buffer, memory_offset);
@@ -91,13 +92,17 @@ pub struct Graphics {
     command_pool: vk::CommandPool,
 
     graphics_barriers: GraphicsBarriers,
-    descriptor_set_layout: vk::DescriptorSetLayout,
 
-    descriptor_pool: descriptor::Pool,
-    global_descriptor_sets: Vec<vk::DescriptorSet>,
+    pub mesh_descriptor_set_layout: vk::DescriptorSetLayout,
+    pub global_descriptor_set_layout: vk::DescriptorSetLayout,
+
+    pub global_descriptor_allocator: DescriptorAllocator,
+    pub mesh_descriptor_allocator: DescriptorAllocator,
+    pub descriptor_writer: DescriptorWriter,
+    pub global_descriptor_sets: Vec<vk::DescriptorSet>,
 
     // on swapchain
-    swapchain: Swapchain,
+    pub swapchain: Swapchain,
     depth_buffer: DepthBuffer,
 
     pipeline: vk::Pipeline,
@@ -151,7 +156,20 @@ impl Graphics {
                 swapchain.get_format(),
             )?
         };
-        let descriptor_set_layout: vk::DescriptorSetLayout = unsafe {
+
+        let global_descriptor_set_layout: vk::DescriptorSetLayout = unsafe {
+            descriptor::layout::create(
+                &device,
+                &[descriptor::layout::DescriptorInfo {
+                    binding: 0,
+                    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::VERTEX,
+                }],
+            )?
+        };
+
+        let mesh_descriptor_set_layout: vk::DescriptorSetLayout = unsafe {
             descriptor::layout::create(
                 &device,
                 &[
@@ -170,11 +188,12 @@ impl Graphics {
                 ],
             )?
         };
+
         let (pipeline_layout, pipeline) = unsafe {
             pipeline::create_pipeline(
                 &device,
                 swapchain.get_extent(),
-                descriptor_set_layout,
+                &[global_descriptor_set_layout, mesh_descriptor_set_layout],
                 render_pass,
             )?
         };
@@ -189,37 +208,47 @@ impl Graphics {
         };
         let graphics_barriers = GraphicsBarriers::new(&device, swapchain.get_images())?;
 
-        let descriptor_pool = unsafe {
-            descriptor::pool::create(
-                &device,
-                &[
-                    descriptor::pool::PoolDescription {
-                        type_: vk::DescriptorType::UNIFORM_BUFFER,
-                        descriptor_count: swapchain.get_length() as u32,
-                    },
-                    descriptor::pool::PoolDescription {
-                        type_: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: swapchain.get_length() as u32,
-                    },
-                ],
-                swapchain.get_length() as u32,
-            )?
-        };
-
-        let descriptor_sets: Vec<vk::DescriptorSet> = unsafe {
-            descriptor::set::create(
-                &device,
-                &descriptor_pool,
-                descriptor_set_layout,
-                swapchain.get_length(),
-            )?
-        };
-
         let command_buffers = unsafe {
             command_buffers::allocate_command_buffers(
                 &device,
                 command_pool,
                 swapchain.get_length() as u32,
+            )?
+        };
+
+        let mut global_descriptor_allocator = DescriptorAllocator::new(
+            &device,
+            &[descriptor::pool::PoolDescription {
+                type_: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+            }],
+            swapchain.get_length() as u32,
+            1024,
+        );
+
+        let mesh_descriptor_allocator = DescriptorAllocator::new(
+            &device,
+            &[
+                descriptor::pool::PoolDescription {
+                    type_: vk::DescriptorType::UNIFORM_BUFFER,
+                    descriptor_count: 1,
+                },
+                descriptor::pool::PoolDescription {
+                    type_: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    descriptor_count: 1,
+                },
+            ],
+            swapchain.get_length() as u32,
+            1024,
+        );
+
+        let descriptor_writer = DescriptorWriter::default();
+
+        let global_descriptor_sets = unsafe {
+            global_descriptor_allocator.allocate(
+                &device,
+                global_descriptor_set_layout,
+                swapchain.get_length(),
             )?
         };
 
@@ -239,9 +268,8 @@ impl Graphics {
             present_queue,
             command_pool,
             graphics_barriers,
-            descriptor_set_layout,
-            descriptor_pool,
-            global_descriptor_sets: descriptor_sets,
+            mesh_descriptor_set_layout,
+            global_descriptor_set_layout,
             swapchain,
             depth_buffer,
             pipeline,
@@ -250,6 +278,10 @@ impl Graphics {
             framebuffers,
             command_buffers,
             start: Instant::now(),
+            global_descriptor_allocator,
+            mesh_descriptor_allocator,
+            descriptor_writer,
+            global_descriptor_sets,
         })
     }
 }
@@ -264,7 +296,7 @@ impl Graphics {
         self.start
     }
 
-    pub(super) fn get_device(&self) -> &Device {
+    pub fn get_device(&self) -> &Device {
         &self.device
     }
 
@@ -433,7 +465,10 @@ impl Graphics {
                 pipeline::create_pipeline(
                     &self.device,
                     self.swapchain.get_extent(),
-                    self.descriptor_set_layout,
+                    &[
+                        self.global_descriptor_set_layout,
+                        self.mesh_descriptor_set_layout,
+                    ],
                     self.render_pass,
                 )?
             };
@@ -477,8 +512,11 @@ impl Graphics {
     pub fn destroy(&mut self) {
         unsafe {
             self.destroy_swapchain();
-            descriptor::layout::destroy(&self.device, self.descriptor_set_layout);
-            descriptor::pool::destroy(&self.device, &self.descriptor_pool);
+            descriptor::layout::destroy(&self.device, self.mesh_descriptor_set_layout);
+            descriptor::layout::destroy(&self.device, self.global_descriptor_set_layout);
+
+            self.global_descriptor_allocator.destroy(&self.device);
+            self.mesh_descriptor_allocator.destroy(&self.device);
 
             self.graphics_barriers.destroy(&self.device);
 
@@ -646,7 +684,7 @@ impl Graphics {
     pub unsafe fn bind_descriptor_set(
         &self,
         command_buffer: vk::CommandBuffer,
-        descriptor_set: vk::DescriptorSet,
+        descriptor_sets: &[vk::DescriptorSet],
     ) {
         unsafe {
             self.device.cmd_bind_descriptor_sets(
@@ -654,24 +692,7 @@ impl Graphics {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
                 0,
-                &[descriptor_set],
-                &[],
-            );
-        }
-    }
-
-    pub unsafe fn bind_descriptor_set_indexed(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        index: usize,
-    ) {
-        unsafe {
-            self.device.cmd_bind_descriptor_sets(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline_layout,
-                0,
-                &[self.global_descriptor_sets[index]],
+                descriptor_sets,
                 &[],
             );
         }
@@ -691,19 +712,6 @@ impl Graphics {
         uniform_buffer::destroy_series(&self.device, uniform_buffers);
     }
 
-    pub unsafe fn create_descriptor_sets(&self) -> Result<Vec<vk::DescriptorSet>> {
-        let descriptor_sets: Vec<vk::DescriptorSet> = unsafe {
-            descriptor::set::create(
-                &self.device,
-                &self.descriptor_pool,
-                self.descriptor_set_layout,
-                self.swapchain.get_length(),
-            )?
-        };
-
-        Ok(descriptor_sets)
-    }
-
     pub unsafe fn bind_uniform_buffer<T>(
         &self,
         uniform_buffers: &UniformBufferSeries,
@@ -720,31 +728,12 @@ pub mod graphics_utility {
 
     use crate::core::graphics::{
         graphics::Index,
-        wrappers::{
-            self, bind_sampler_to_descriptor_sets, uniform_buffer, IndexBuffer, Vertex,
-            VertexBuffer,
-        },
+        wrappers::{uniform_buffer, IndexBuffer, Vertex, VertexBuffer},
     };
 
     use super::{
         CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
     };
-
-    pub unsafe fn bind_image_sampler(
-        graphics: &Graphics,
-        sampler: &ImageSampler,
-        image: &LoadedImage,
-        binding: u32,
-    ) {
-        log::info!("Image sampler bound");
-        wrappers::bind_sampler_to_descriptor_sets(
-            &graphics.device,
-            &sampler,
-            &image,
-            &graphics.global_descriptor_sets,
-            binding,
-        );
-    }
 
     impl UniformBufferSeries {
         pub unsafe fn create_from_graphics<T>(graphics: &Graphics) -> Result<Self> {
@@ -755,11 +744,6 @@ pub mod graphics_utility {
                 graphics.physical_device,
                 graphics.swapchain.get_length(),
             )
-        }
-
-        pub unsafe fn bind_to_graphics<T>(&self, graphics: &Graphics, binding: u32) {
-            log::info!("Bind uniform buffer series");
-            self.bind_to_descriptor_sets::<T>(&graphics.device, &graphics.global_descriptor_sets, binding)
         }
 
         pub unsafe fn destroy_uniform_buffer_series(&self, graphics: &Graphics) {
@@ -891,22 +875,6 @@ pub mod graphics_utility {
         pub unsafe fn create_from_graphics(graphics: &Graphics) -> Result<Self> {
             log::info!("Create sampler");
             Self::create(&graphics.device)
-        }
-
-        pub unsafe fn bind_image_sampler(
-            &self,
-            graphics: &Graphics,
-            image: &LoadedImage,
-            binding: u32,
-        ) {
-            log::info!("Bind sampler");
-            bind_sampler_to_descriptor_sets(
-                &graphics.device,
-                self,
-                image,
-                &graphics.global_descriptor_sets,
-                binding,
-            );
         }
 
         pub unsafe fn destroy_with_graphics(&self, graphics: &Graphics) {

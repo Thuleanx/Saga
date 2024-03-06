@@ -17,6 +17,7 @@ vulkanalia = { version = "=0.22.0", features = ["libloading", "provisional", "wi
 winit = "0.28"
 bevy_app = "0.13.0"
 bevy_ecs = "0.13.0"
+bevy_time = "0.13.0"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

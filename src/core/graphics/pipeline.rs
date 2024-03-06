@@ -19,7 +19,7 @@ pub static INDICES : &[u16] = &[0, 1, 2, 2, 3, 0];
 pub unsafe fn create_pipeline(
     device: &Device, 
     swapchain_extent: vk::Extent2D, 
-    set_layout: vk::DescriptorSetLayout,
+    set_layouts: &[vk::DescriptorSetLayout],
     render_pass: vk::RenderPass,
 ) -> Result<(vk::PipelineLayout, vk::Pipeline)> {
 
@@ -106,9 +106,9 @@ pub unsafe fn create_pipeline(
         .max_depth_bounds(1.0)
         .stencil_test_enable(false);
 
-    let set_layouts = &[set_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(set_layouts);
+    log::info!("Create pipeline with layout of {} descriptors.", layout_info.set_layout_count);
 
     let pipeline_layout: vk::PipelineLayout = device.create_pipeline_layout(&layout_info, None)?;
 

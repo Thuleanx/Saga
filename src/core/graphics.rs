@@ -5,7 +5,6 @@
  */
 
 mod abstraction;
-mod appdata;
 mod buffers;
 mod command_buffers;
 mod descriptor;

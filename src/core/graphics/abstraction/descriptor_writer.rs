@@ -13,6 +13,7 @@ struct UniformWriteInformation {
     descriptor_set: vk::DescriptorSet,
 }
 
+#[derive(Default)]
 pub struct DescriptorWriter {
     image_writes: Vec<ImageWriteInformation>,
     uniform_writes: Vec<UniformWriteInformation>,
@@ -22,7 +23,7 @@ impl DescriptorWriter {
     pub fn queue_write_image(
         &mut self,
         device: &Device,
-        sampler: ImageSampler,
+        sampler: &ImageSampler,
         image: &LoadedImage,
         descriptor_sets: &[vk::DescriptorSet],
         binding: u32,

@@ -1,2 +1,2 @@
-mod descriptor_allocator;
-mod descriptor_writer;
+pub mod descriptor_allocator;
+pub mod descriptor_writer;
