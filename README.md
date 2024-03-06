@@ -9,18 +9,20 @@ Essential tasks list
 - [x] Depth mapping
 - [ ] Set up Bevy
     - [x] Set up Bevy app
-    - [ ] Setup rendering system
+    - [x] Setup rendering system
         - [x] Hook up window manager
         - [x] Attach camera
         - [x] Render mesh
         - [x] Handle swapchain recreation
-        - [ ] Multiple uniform buffers (for model matrix)
-        - [ ] Render multiple meshes
-- [ ] Simple scene setup
-- [ ] Player camera
-- [ ] Player input capture
-- [ ] Player movement
+        - [x] Multiple uniform buffers (for model matrix)
+        - [x] Render multiple meshes
 - [ ] Hand model
+- [ ] Enemy model
+- [ ] Simple scene setup
+    - [ ] Wall texture
+- [x] Player input capture
+- [ ] Player camera
+- [x] Player movement
 - [ ] 2D Terrain Collision
     - [ ] Circle - line segment
     - [ ] Circle - circle

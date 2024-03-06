@@ -41,7 +41,7 @@ impl Rotation {
     }
 
     fn right(&self) -> Vec3 {
-        self.0 * vec3(1.0, 0.0, 0.0)
+        self.0 * vec3(-1.0, 0.0, 0.0)
     }
 
     fn up(&self) -> Vec3 {
@@ -112,7 +112,7 @@ impl Camera {
         projection_matrix * intermediate_matrix
     }
 
-    fn calculate_view_matrix(&self, position: &Position, rotation: &Rotation) -> Mat4 {
+    fn calculate_view_matrix(position: &Position, rotation: &Rotation) -> Mat4 {
         let look: Vec3 = rotation.forward();
         let up: Vec3 = rotation.up();
         let right: Vec3 = look.cross(up);
@@ -213,7 +213,7 @@ fn spawn_camera(
         height: size.height,
     };
 
-    let view = camera.calculate_view_matrix(&position, &rotation);
+    let view = Camera::calculate_view_matrix(&position, &rotation);
     let projection = camera.calculate_projection_matrix();
 
     let spawn = commands.spawn((
@@ -329,11 +329,13 @@ mod saga_renderer {
     use bevy_ecs::system::ResMut;
     use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
     use bevy_time::Time;
-    use cgmath::{Deg, Matrix3, Matrix4};
+    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Vector2, Zero};
     use vulkanalia::vk;
+    use winit::event::VirtualKeyCode as Key;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
 
+    use super::saga_input::ButtonInput;
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
     use super::{MeshRenderingInfo, Position, Rotation};
 
@@ -356,7 +358,8 @@ mod saga_renderer {
                     build_command_buffer.pipe(log_error_result),
                 )
                 .add_systems(bevy_app::Update, camera_on_screen_resize)
-                .add_systems(bevy_app::Update, animate_meshes);
+                .add_systems(bevy_app::Update, animate_meshes)
+                .add_systems(bevy_app::Update, camera_movement);
         }
     }
 
@@ -379,6 +382,35 @@ mod saga_renderer {
     #[derive(Copy, Clone, Debug)]
     pub struct MeshUniformBufferObject {
         pub model: Matrix4<f32>,
+    }
+
+    #[rustfmt::skip]
+    fn camera_movement(
+        time: Res<Time>,
+        button_input: Res<ButtonInput>,
+        mut cameras: Query<(&mut Position, &Rotation, &Camera, &mut CameraRenderingInfo)>
+    ) {
+        let movement_w = if button_input.is_key_down(Key::W) {1} else {0};
+        let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
+        let movement_s = if button_input.is_key_down(Key::S) {1} else {0};
+        let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
+
+        let mut movement = cgmath::vec2(
+            (movement_d - movement_a) as f32, (movement_w - movement_s) as f32
+        );
+
+        if movement == Vector2::zero() {
+            return;
+        }
+
+        movement = movement.normalize();
+
+        let movement_speed = 4.0 as f32;
+
+        for (mut position, rotation, camera,  mut rendering_info) in cameras.iter_mut() {
+            position.0 += (rotation.forward() * movement.y + rotation.right() * movement.x) * movement_speed * time.delta_seconds();
+            rendering_info.view = Camera::calculate_view_matrix(&position, rotation);
+        }
     }
 
     fn camera_on_screen_resize(
@@ -614,6 +646,7 @@ mod saga_renderer {
 }
 
 mod saga_window {
+    use super::saga_input;
     use crate::{
         core::graphics::Graphics,
         doomclone::app::saga_renderer::{Cleanup, Resize},
@@ -632,7 +665,8 @@ mod saga_window {
 
     impl Plugin for WindowPlugin {
         fn build(&self, app: &mut App) {
-            app.set_runner(winit_event_runner);
+            app.set_runner(winit_event_runner)
+                .add_plugins(saga_input::InputPlugin);
         }
     }
 
@@ -678,6 +712,49 @@ mod saga_window {
 
             if is_window_being_destroyed {
                 return;
+            }
+
+            match event {
+                Event::WindowEvent {
+                    // Note this deeply nested pattern match
+                    event:
+                        WindowEvent::KeyboardInput {
+                            input: key_event, ..
+                        },
+                    ..
+                } => {
+                    let input = app.world.get_resource_mut::<saga_input::ButtonInput>();
+                    if let Some(mut input) = input {
+                        let key_event = input.process_and_generate_key_event(key_event);
+                        drop(input);
+                        if let Some(key_event) = key_event {
+                            app.world.send_event(key_event);
+                        }
+                    }
+                }
+                Event::WindowEvent {
+                    event: WindowEvent::MouseInput { button, state, .. },
+                    ..
+                } => {
+                    let input = app.world.get_resource_mut::<saga_input::ButtonInput>();
+                    if let Some(mut input) = input {
+                        let mouse_button_event =
+                            input.process_and_generate_mouse_event(button, state);
+                        drop(input);
+                        app.world.send_event(mouse_button_event);
+                    }
+                }
+                Event::WindowEvent {
+                    event: WindowEvent::CursorMoved { position, .. },
+                    ..
+                } => {
+                    if let Some(mut mouse_position) =
+                        app.world.get_resource_mut::<saga_input::MousePosition>()
+                    {
+                        mouse_position.0 = cgmath::vec2(position.x, position.y);
+                    }
+                }
+                _ => {}
             }
 
             // let window = world
@@ -748,6 +825,113 @@ mod saga_window {
                 _ => {}
             }
         });
+    }
+}
+
+mod saga_input {
+    pub use winit::event::VirtualKeyCode as Key;
+
+    use anyhow::Result;
+    use bevy_app::{App, Plugin};
+    use cgmath::{Vector2, Zero};
+    use std::collections::HashSet;
+    use winit::event::{ElementState, KeyboardInput, MouseButton, ScanCode};
+
+    #[derive(bevy_ecs::system::Resource)]
+    pub struct ButtonInput {
+        key_pressed: HashSet<usize>,
+        mouse_button_pressed: HashSet<MouseButton>,
+    }
+
+    #[derive(bevy_ecs::system::Resource)]
+    pub struct MousePosition(pub Vector2<f64>);
+
+    #[derive(bevy_ecs::event::Event)]
+    pub struct KeyboardEvent {
+        pub scancode: ScanCode,
+        pub state: ElementState,
+        pub keycode: Key,
+    }
+
+    #[derive(bevy_ecs::event::Event)]
+    pub struct MouseButtonEvent {
+        pub button: MouseButton,
+        pub state: ElementState,
+    }
+
+    impl ButtonInput {
+        pub fn process_and_generate_key_event(
+            &mut self,
+            key_input: KeyboardInput,
+        ) -> Option<KeyboardEvent> {
+            if let KeyboardInput {
+                scancode,
+                state,
+                virtual_keycode: Some(keycode),
+                ..
+            } = key_input
+            {
+                match state {
+                    winit::event::ElementState::Pressed => {
+                        self.key_pressed.insert(keycode as usize);
+                    }
+                    winit::event::ElementState::Released => {
+                        self.key_pressed.remove(&(keycode as usize));
+                    }
+                }
+
+                return Some(KeyboardEvent {
+                    scancode,
+                    state,
+                    keycode,
+                });
+            }
+
+            None
+        }
+
+        pub fn process_and_generate_mouse_event(
+            &mut self,
+            button: MouseButton,
+            state: ElementState,
+        ) -> MouseButtonEvent {
+            match state {
+                winit::event::ElementState::Pressed => {
+                    self.mouse_button_pressed.insert(button);
+                }
+                winit::event::ElementState::Released => {
+                    self.mouse_button_pressed.remove(&button);
+                }
+            }
+
+            MouseButtonEvent { button, state }
+        }
+
+        pub fn is_key_down(&self, keycode: Key) -> bool {
+            self.key_pressed.contains(&(keycode as usize))
+        }
+
+        pub fn is_button_down(&self, button: MouseButton) -> bool {
+            self.mouse_button_pressed.contains(&button)
+        }
+    }
+
+    pub struct InputPlugin;
+
+    impl Plugin for InputPlugin {
+        fn build(&self, app: &mut App) {
+            init_resources(app).unwrap();
+        }
+    }
+
+    fn init_resources(app: &mut App) -> Result<()> {
+        app.world.insert_resource(ButtonInput {
+            key_pressed: Default::default(),
+            mouse_button_pressed: Default::default(),
+        });
+        app.world.insert_resource(MousePosition(Vector2::zero()));
+
+        Ok(())
     }
 }
 
