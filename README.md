@@ -7,7 +7,7 @@ DOOM Clone, enemies are abberations.
 Essential tasks list
 - [x] Texture sampling
 - [x] Depth mapping
-- [ ] Set up Bevy
+- [x] Set up Bevy
     - [x] Set up Bevy app
     - [x] Setup rendering system
         - [x] Hook up window manager
@@ -18,10 +18,10 @@ Essential tasks list
         - [x] Render multiple meshes
 - [ ] Hand model
 - [ ] Enemy model
-- [ ] Simple scene setup
-    - [ ] Wall texture
+- [x] Simple scene setup
+    - [x] Wall texture
 - [x] Player input capture
-- [ ] Player camera
+- [x] Player camera
 - [x] Player movement
 - [ ] 2D Terrain Collision
     - [ ] Circle - line segment

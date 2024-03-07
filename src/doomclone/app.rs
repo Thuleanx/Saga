@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use self::saga_renderer::CameraUniformBufferObject;
 use crate::{
     core::graphics::{
@@ -5,6 +7,7 @@ use crate::{
     },
     doomclone::app::saga_renderer::MeshUniformBufferObject,
 };
+use anyhow::Result;
 use bevy_app::App;
 use bevy_ecs::{
     component::Component,
@@ -16,6 +19,9 @@ use vulkanalia::prelude::v1_0::*;
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 type Quat = cgmath::Quaternion<f32>;
+
+#[derive(Component)]
+struct Imp;
 
 #[derive(Component)]
 struct Position(Vec3);
@@ -184,9 +190,9 @@ fn spawn_camera(
     mut commands: Commands,
 ) {
     log::info!("Spawn camera");
-    let position = Position(vec3(0.0, 0.0, -20.0));
+    let position = Position(vec3(0.0, 2.0, -10.0));
     let rotation = Rotation(Quat::one());
-    let movement_speed = MovementSpeed(4.0);
+    let movement_speed = MovementSpeed(8.0);
     let turn_speed = TurnSpeed(cgmath::vec2(
         cgmath::Rad(1.0 / 100.0),
         cgmath::Rad(1.0 / 100.0),
@@ -241,6 +247,109 @@ fn spawn_camera(
     ));
 }
 
+fn construct_mesh(
+    graphics: &mut ResMut<Graphics>,
+    path_to_obj: &Path,
+    path_to_texture: &Path,
+) -> Result<(Mesh, MainTexture, MeshRenderingInfo)> {
+    let cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
+
+    if cpu_mesh.len() == 0 {
+        return Err(anyhow::anyhow!(
+            "Provided obj file at path {:?} does not have a mesh",
+            path_to_obj
+        ));
+    }
+
+    let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh[0]).unwrap() };
+
+    let texture = Image::load(&path_to_texture).unwrap();
+
+    let loaded_texture = unsafe { LoadedImage::create(&graphics, &texture).unwrap() };
+    let texture_sampler = unsafe { ImageSampler::create_from_graphics(&graphics).unwrap() };
+
+    let descriptor_sets = unsafe {
+        let device = graphics.get_device().clone();
+        let set_layout = graphics.mesh_descriptor_set_layout;
+        let swapchain_len = graphics.swapchain.get_length();
+        graphics
+            .mesh_descriptor_allocator
+            .allocate(&device, set_layout, swapchain_len)
+            .unwrap()
+    };
+
+    let uniform_buffers = unsafe {
+        UniformBufferSeries::create_from_graphics::<MeshUniformBufferObject>(&graphics).unwrap()
+    };
+
+    let device = graphics.get_device().clone();
+    graphics.descriptor_writer.queue_write_image(
+        &device,
+        &texture_sampler,
+        &loaded_texture,
+        &descriptor_sets,
+        1,
+    );
+
+    uniform_buffers
+        .get_buffers()
+        .iter()
+        .cloned()
+        .enumerate()
+        .for_each(|(index, uniform_buffer)| {
+            let device = graphics.get_device().clone();
+            graphics
+                .descriptor_writer
+                .queue_write_buffers::<MeshUniformBufferObject>(
+                    &device,
+                    uniform_buffer,
+                    &[descriptor_sets[index]],
+                    0,
+                );
+        });
+
+    Ok((
+        Mesh { gpu_mesh },
+        MainTexture {
+            texture: loaded_texture,
+            sampler: texture_sampler,
+        },
+        MeshRenderingInfo {
+            uniform_buffers,
+            descriptor_sets,
+        },
+    ))
+}
+
+fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+    log::info!("Spawn map");
+
+    let path_to_obj = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("meshes")
+        .join("map_walls.obj");
+    let path_to_texture = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("png")
+        .join("walls.png");
+
+    let (mesh, main_texture, mesh_rendering_info) =
+        construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+
+    let position = vec3(0.0, 0.0, 0.0);
+    let rotation = Quat::one();
+
+    let spawn = commands.spawn((
+        Position(position),
+        Rotation(rotation),
+        mesh,
+        main_texture,
+        mesh_rendering_info,
+    ));
+}
+
 fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
     log::info!("Spawn mesh");
 
@@ -259,75 +368,16 @@ fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
             .join("meshes")
             .join("imphat_diffuse.png");
 
-        let cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
-
-        if cpu_mesh.len() == 0 {
-            log::error!(
-                "Provided obj file at path {:?} yields no object",
-                &path_to_obj
-            );
-            return;
-        }
-
-        let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh[0]).unwrap() };
-
-        let texture = Image::load(&path_to_texture).unwrap();
-
-        let loaded_texture = unsafe { LoadedImage::create(&graphics, &texture).unwrap() };
-        let texture_sampler = unsafe { ImageSampler::create_from_graphics(&graphics).unwrap() };
-
-        let descriptor_sets = unsafe {
-            let device = graphics.get_device().clone();
-            let set_layout = graphics.mesh_descriptor_set_layout;
-            let swapchain_len = graphics.swapchain.get_length();
-            graphics
-                .mesh_descriptor_allocator
-                .allocate(&device, set_layout, swapchain_len)
-                .unwrap()
-        };
-
-        let uniform_buffers = unsafe {
-            UniformBufferSeries::create_from_graphics::<MeshUniformBufferObject>(&graphics).unwrap()
-        };
-
-        let device = graphics.get_device().clone();
-        graphics.descriptor_writer.queue_write_image(
-            &device,
-            &texture_sampler,
-            &loaded_texture,
-            &descriptor_sets,
-            1,
-        );
-
-        uniform_buffers
-            .get_buffers()
-            .iter()
-            .cloned()
-            .enumerate()
-            .for_each(|(index, uniform_buffer)| {
-                let device = graphics.get_device().clone();
-                graphics
-                    .descriptor_writer
-                    .queue_write_buffers::<MeshUniformBufferObject>(
-                        &device,
-                        uniform_buffer,
-                        &[descriptor_sets[index]],
-                        0,
-                    );
-            });
+        let (mesh, main_texture, mesh_rendering_info) =
+            construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let spawn = commands.spawn((
             Position(position),
             Rotation(rotation),
-            Mesh { gpu_mesh },
-            MainTexture {
-                texture: loaded_texture,
-                sampler: texture_sampler,
-            },
-            MeshRenderingInfo {
-                uniform_buffers,
-                descriptor_sets,
-            },
+            Imp,
+            mesh,
+            main_texture,
+            mesh_rendering_info,
         ));
     }
 }
@@ -350,7 +400,7 @@ mod saga_renderer {
 
     use super::saga_input::{ButtonInput, MouseChangeEvent};
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
-    use super::{MeshRenderingInfo, MovementSpeed, Position, Rotation, TurnSpeed};
+    use super::{Imp, MeshRenderingInfo, MovementSpeed, Position, Rotation, TurnSpeed};
 
     pub struct Plugin;
 
@@ -422,7 +472,19 @@ mod saga_renderer {
         movement = movement.normalize();
 
         for (mut position, rotation, camera, movement_speed) in cameras.iter_mut() {
-            position.0 += (rotation.forward() * movement.y + rotation.right() * movement.x) * movement_speed.0 * time.delta_seconds();
+            let mut forward = rotation.forward();
+            forward.y = 0.0;
+            if !forward.is_zero() {
+                forward = forward.normalize();
+            }
+
+            let mut right = rotation.right();
+            right.y = 0.0;
+            if !right.is_zero() {
+                right = right.normalize();
+            }
+
+            position.0 += (forward * movement.y + right * movement.x) * movement_speed.0 * time.delta_seconds();
         }
     }
 
@@ -436,7 +498,8 @@ mod saga_renderer {
                 let turn_amount_f32 = Rad(turn_amount.0 as f32);
                 let turn_axis = cgmath::vec3(0.0, 1.0, 0.0);
 
-                let turn_rotation = Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
+                let turn_rotation =
+                    Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
 
                 rotation.0 = turn_rotation * rotation.0;
             }
@@ -454,7 +517,8 @@ mod saga_renderer {
 
                 let turn_axis = cgmath::vec3(rotation.forward().z, 0.0, -rotation.forward().x);
 
-                let turn_rotation = Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
+                let turn_rotation =
+                    Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
                 rotation.0 = turn_rotation * rotation.0;
             }
         }
@@ -516,7 +580,7 @@ mod saga_renderer {
 
     fn animate_meshes(
         time: Res<Time>,
-        mut mesh_query: Query<(&mut Position, &mut Rotation, &Mesh)>,
+        mut mesh_query: Query<(&mut Position, &mut Rotation, &Mesh), With<Imp>>,
     ) {
         for (mut position, mut rotation, mesh) in mesh_query.iter_mut() {
             let time = time.elapsed().as_secs_f32();
@@ -1015,6 +1079,142 @@ mod saga_input {
     }
 }
 
+mod saga_collision {
+    use bevy_ecs::component::Component;
+    use cgmath::{InnerSpace, Vector2, Zero};
+
+    use super::saga_utils;
+
+    #[derive(Component)]
+    struct CircleCollider {
+        position: Vector2<f32>,
+        radius: f32,
+    }
+
+    #[derive(Component)]
+    struct MeshCollider {}
+
+    #[derive(Clone, Copy)]
+    struct Circle {
+        position: Vector2<f32>,
+        radius: f32,
+    }
+
+    #[derive(Clone, Copy)]
+    struct Line(Vector2<f32>, Vector2<f32>);
+
+    impl Line {
+        fn len2(&self) -> f32 {
+            (self.1 - self.0).magnitude2()
+        }
+    }
+
+    fn circle_line_penetration_time(
+        circle: Circle,
+        line: Line,
+        direction: Vector2<f32>,
+    ) -> Option<f32> {
+        if direction.is_zero() {
+            return None;
+        }
+
+        // We are going to use an algorithm that works in 3D as well and try
+        // our best to avoid division. But we unfortunately have to use 1 sqrt operation
+
+        // This query is equivalent to asking if a ray trace is going to pass through a
+        // cylinder of radius = radius of the circle.
+
+        // Let P = circle.position + direction * t be the point at which the ray intersects the cylinder.
+        // Notice that (P - line.0) cross (P - line.1) represents the area of a parallelogram with
+        // the same area as that of a 2D cross section of the cylinder through the center.
+        // So (P - line.0) cross (P - line.1) = circle.radius * len(line)
+        // We can square both sides and use the quadratic formula to solve for t
+        let end_position = direction + circle.position;
+
+        // Let a = circle.position
+        // Let b = circle.position + direction
+        // Let c = line.0
+        // Let d = line.1
+        let badc = saga_utils::cross_2d(direction, line.1 - line.0);
+        let acdc = saga_utils::cross_2d(circle.position - line.0, line.1 - line.0);
+
+        let quadratic_formula_a = badc * badc;
+        let quadratic_formula_b = 2.0 * badc * acdc;
+        let quadratic_formula_c = acdc * acdc - circle.radius * circle.radius * line.len2();
+
+        if let Ok(solutions) = saga_utils::solve_quadratic(quadratic_formula_a, quadratic_formula_b, quadratic_formula_c) {
+            if let Some(&t) = solutions.get(0) {
+                let line_segment_intersects_cylinder = t >= 0.0 && t <= 1.0;
+                if !line_segment_intersects_cylinder {
+                    return None;
+                }
+
+                let p = direction * t + circle.position;
+                let projection_onto_line = cgmath::dot(p - line.0, line.1 - line.0);
+
+                let line_intersects_cylinder_segment = projection_onto_line > 0.0 && projection_onto_line <= line.len2();
+                if !line_intersects_cylinder_segment {
+                    return None;
+                }
+
+                return Some(t);
+            }
+        }
+
+        None
+    }
+}
+
+mod saga_utils {
+    use anyhow::Result;
+    use cgmath::{
+        num_traits::Float,
+        Vector2,
+    };
+
+    pub fn cross_2d<F: Float>(a: Vector2<F>, b: Vector2<F>) -> F {
+        a.x * b.y - a.y * b.x
+    }
+
+    pub fn square<F: Float>(a: F) -> F {
+        a * a
+    }
+
+    pub fn solve_quadratic(a: f32, b: f32, c: f32) -> Result<Vec<f32>> {
+        let infinite_solutions = a == 0.0 && b == 0.0 && c == 0.0;
+        if infinite_solutions {
+            return Err(anyhow::anyhow!(
+                "There are infinitely many solutions to this"
+            ));
+        }
+
+        let mut d = b * b - 4.0 * a * c;
+        let no_real_solution = d < 0.0;
+        let no_solution = (a == 0.0 && b == 0.0) || no_real_solution; // implicit c != 0.0
+        if no_solution {
+            return Ok(vec![]);
+        }
+        let one_solution_only = a == 0.0;
+        if one_solution_only {
+            return Ok(vec![-c / b]);
+        }
+        if d == 0.0 {
+            return Ok(vec![-b / (2.0 * a)]);
+        }
+
+        d = d.sqrt();
+
+        // Quadratic formula
+        let mut c1 = (-b - d) / 2.0 * a;
+        let mut c2 = (-b + d) / 2.0 * a;
+        if c2 > c1 {
+            std::mem::swap(&mut c1, &mut c2);
+        }
+
+        Ok(vec![c1, c2])
+    }
+}
+
 pub fn construct_app() -> App {
     let mut app = App::new();
     app.add_plugins((
@@ -1024,6 +1224,7 @@ pub fn construct_app() -> App {
     ))
     .add_systems(bevy_app::Startup, spawn_camera)
     .add_systems(bevy_app::Startup, spawn_mesh)
+    .add_systems(bevy_app::Startup, spawn_map)
     .add_systems(bevy_app::PostStartup, finalize_descriptors);
 
     app
