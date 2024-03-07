@@ -10,7 +10,7 @@ use bevy_ecs::{
     component::Component,
     system::{Commands, Res, ResMut},
 };
-use cgmath::{vec3, Angle, Deg, Zero};
+use cgmath::{vec3, Angle, Deg, One, Vector2};
 use vulkanalia::prelude::v1_0::*;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -48,6 +48,12 @@ impl Rotation {
         self.0 * vec3(0.0, 1.0, 0.0)
     }
 }
+
+#[derive(Component)]
+struct MovementSpeed(f32);
+
+#[derive(Component)]
+struct TurnSpeed(Vector2<cgmath::Rad<f64>>);
 
 #[derive(Component)]
 struct Camera {
@@ -179,7 +185,12 @@ fn spawn_camera(
 ) {
     log::info!("Spawn camera");
     let position = Position(vec3(0.0, 0.0, -20.0));
-    let rotation = Rotation(Quat::zero());
+    let rotation = Rotation(Quat::one());
+    let movement_speed = MovementSpeed(4.0);
+    let turn_speed = TurnSpeed(cgmath::vec2(
+        cgmath::Rad(1.0 / 100.0),
+        cgmath::Rad(1.0 / 100.0),
+    ));
 
     let size = window.window.inner_size();
 
@@ -219,6 +230,8 @@ fn spawn_camera(
     let spawn = commands.spawn((
         position,
         rotation,
+        movement_speed,
+        turn_speed,
         camera,
         CameraRenderingInfo {
             view,
@@ -233,7 +246,7 @@ fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
 
     for pos_x in -2..3 {
         let position = vec3((pos_x as f32) * 3.0, 0.0, 0.0);
-        let rotation = Quat::zero();
+        let rotation = Quat::one();
 
         let path_to_obj = std::env::current_dir()
             .unwrap()
@@ -329,15 +342,15 @@ mod saga_renderer {
     use bevy_ecs::system::ResMut;
     use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
     use bevy_time::Time;
-    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Vector2, Zero};
+    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, Rotation3, Vector2, Zero};
     use vulkanalia::vk;
     use winit::event::VirtualKeyCode as Key;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
 
-    use super::saga_input::ButtonInput;
+    use super::saga_input::{ButtonInput, MouseChangeEvent};
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
-    use super::{MeshRenderingInfo, Position, Rotation};
+    use super::{MeshRenderingInfo, MovementSpeed, Position, Rotation, TurnSpeed};
 
     pub struct Plugin;
 
@@ -359,7 +372,10 @@ mod saga_renderer {
                 )
                 .add_systems(bevy_app::Update, camera_on_screen_resize)
                 .add_systems(bevy_app::Update, animate_meshes)
-                .add_systems(bevy_app::Update, camera_movement);
+                .add_systems(bevy_app::Update, camera_movement)
+                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
+                .add_systems(bevy_app::Update, camera_rotate_with_mouse_y)
+                .add_systems(bevy_app::PostUpdate, update_camera_view);
         }
     }
 
@@ -388,7 +404,7 @@ mod saga_renderer {
     fn camera_movement(
         time: Res<Time>,
         button_input: Res<ButtonInput>,
-        mut cameras: Query<(&mut Position, &Rotation, &Camera, &mut CameraRenderingInfo)>
+        mut cameras: Query<(&mut Position, &Rotation, &Camera, &MovementSpeed)>
     ) {
         let movement_w = if button_input.is_key_down(Key::W) {1} else {0};
         let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
@@ -405,11 +421,42 @@ mod saga_renderer {
 
         movement = movement.normalize();
 
-        let movement_speed = 4.0 as f32;
+        for (mut position, rotation, camera, movement_speed) in cameras.iter_mut() {
+            position.0 += (rotation.forward() * movement.y + rotation.right() * movement.x) * movement_speed.0 * time.delta_seconds();
+        }
+    }
 
-        for (mut position, rotation, camera,  mut rendering_info) in cameras.iter_mut() {
-            position.0 += (rotation.forward() * movement.y + rotation.right() * movement.x) * movement_speed * time.delta_seconds();
-            rendering_info.view = Camera::calculate_view_matrix(&position, rotation);
+    fn camera_rotate_with_mouse_x(
+        mut mouse_change_events: EventReader<MouseChangeEvent>,
+        mut cameras: Query<(&Position, &mut Rotation, &TurnSpeed)>,
+    ) {
+        for mouse_change_event in mouse_change_events.read() {
+            for (position, mut rotation, turn_speed) in cameras.iter_mut() {
+                let turn_amount = turn_speed.0.x * -mouse_change_event.delta.x;
+                let turn_amount_f32 = Rad(turn_amount.0 as f32);
+                let turn_axis = cgmath::vec3(0.0, 1.0, 0.0);
+
+                let turn_rotation = Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
+
+                rotation.0 = turn_rotation * rotation.0;
+            }
+        }
+    }
+
+    fn camera_rotate_with_mouse_y(
+        mut mouse_change_events: EventReader<MouseChangeEvent>,
+        mut cameras: Query<(&Position, &mut Rotation, &TurnSpeed)>,
+    ) {
+        for mouse_change_event in mouse_change_events.read() {
+            for (position, mut rotation, turn_speed) in cameras.iter_mut() {
+                let turn_amount = turn_speed.0.y * mouse_change_event.delta.y;
+                let turn_amount_f32 = Rad(turn_amount.0 as f32);
+
+                let turn_axis = cgmath::vec3(rotation.forward().z, 0.0, -rotation.forward().x);
+
+                let turn_rotation = Quaternion::from_axis_angle(turn_axis, turn_amount_f32).normalize();
+                rotation.0 = turn_rotation * rotation.0;
+            }
         }
     }
 
@@ -514,6 +561,12 @@ mod saga_renderer {
         }
 
         Ok(())
+    }
+
+    fn update_camera_view(mut cameras: Query<(&Position, &Rotation, &mut CameraRenderingInfo)>) {
+        for (position, rotation, mut rendering_info) in cameras.iter_mut() {
+            rendering_info.view = Camera::calculate_view_matrix(&position, rotation);
+        }
     }
 
     fn update_camera_transform_information(
@@ -646,7 +699,7 @@ mod saga_renderer {
 }
 
 mod saga_window {
-    use super::saga_input;
+    use super::saga_input::{self, MouseChangeEvent};
     use crate::{
         core::graphics::Graphics,
         doomclone::app::saga_renderer::{Cleanup, Resize},
@@ -654,6 +707,7 @@ mod saga_window {
     use anyhow::Result;
     use bevy_app::{App, AppExit, Plugin};
     use bevy_ecs::system::Resource;
+    use cgmath::{Vector2, Zero};
     use winit::{
         dpi::LogicalSize,
         event::{Event, WindowEvent},
@@ -706,6 +760,7 @@ mod saga_window {
 
         let mut is_window_active = true;
         let mut is_window_being_destroyed = false;
+        let mut is_first_mouse_location_input = true;
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
@@ -751,7 +806,23 @@ mod saga_window {
                     if let Some(mut mouse_position) =
                         app.world.get_resource_mut::<saga_input::MousePosition>()
                     {
-                        mouse_position.0 = cgmath::vec2(position.x, position.y);
+                        let last_position = mouse_position.0;
+                        let current_position = cgmath::vec2(position.x, position.y);
+                        let delta = if is_first_mouse_location_input {
+                            Vector2::zero()
+                        } else {
+                            current_position - last_position
+                        };
+
+                        mouse_position.0 = current_position;
+                        drop(mouse_position);
+
+                        app.world.send_event(MouseChangeEvent {
+                            delta,
+                            position: current_position,
+                        });
+
+                        is_first_mouse_location_input = false;
                     }
                 }
                 _ => {}
@@ -859,6 +930,12 @@ mod saga_input {
         pub state: ElementState,
     }
 
+    #[derive(bevy_ecs::event::Event)]
+    pub struct MouseChangeEvent {
+        pub delta: Vector2<f64>,
+        pub position: Vector2<f64>,
+    }
+
     impl ButtonInput {
         pub fn process_and_generate_key_event(
             &mut self,
@@ -921,6 +998,9 @@ mod saga_input {
     impl Plugin for InputPlugin {
         fn build(&self, app: &mut App) {
             init_resources(app).unwrap();
+            app.add_event::<MouseButtonEvent>()
+                .add_event::<KeyboardEvent>()
+                .add_event::<MouseChangeEvent>();
         }
     }
 
