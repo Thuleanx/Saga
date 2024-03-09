@@ -30,8 +30,8 @@ pub use super::wrappers::{Image, ImageSampler, LoadedImage};
 pub use uniform_buffer::UniformBufferSeries;
 
 pub struct CPUMesh {
-    vertices: Vec<Vertex>,
-    indices: Vec<Index>,
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<Index>,
 }
 
 pub struct GPUMesh {

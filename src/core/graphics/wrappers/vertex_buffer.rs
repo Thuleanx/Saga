@@ -11,8 +11,8 @@ type Vec2 = cgmath::Vector2<f32>;
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
-    pos: Vec3,
-    uv: Vec2
+    pub pos: Vec3,
+    pub uv: Vec2
     // color: Vec3,
 }
 

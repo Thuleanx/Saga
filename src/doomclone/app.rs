@@ -5,7 +5,10 @@ use crate::{
     core::graphics::{
         CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
     },
-    doomclone::app::saga_renderer::MeshUniformBufferObject,
+    doomclone::app::{
+        saga_collision::{CircleCollider, MeshCollider, Movable, Velocity},
+        saga_renderer::MeshUniformBufferObject,
+    },
 };
 use anyhow::Result;
 use bevy_app::App;
@@ -13,7 +16,7 @@ use bevy_ecs::{
     component::Component,
     system::{Commands, Res, ResMut},
 };
-use cgmath::{vec3, Angle, Deg, One, Vector2};
+use cgmath::{vec3, Angle, Deg, One, Vector2, Zero};
 use vulkanalia::prelude::v1_0::*;
 
 type Mat4 = cgmath::Matrix4<f32>;
@@ -190,7 +193,7 @@ fn spawn_camera(
     mut commands: Commands,
 ) {
     log::info!("Spawn camera");
-    let position = Position(vec3(0.0, 2.0, -10.0));
+    let position = Position(vec3(0.0, 2.0, -0.0));
     let rotation = Rotation(Quat::one());
     let movement_speed = MovementSpeed(8.0);
     let turn_speed = TurnSpeed(cgmath::vec2(
@@ -239,6 +242,9 @@ fn spawn_camera(
         movement_speed,
         turn_speed,
         camera,
+        CircleCollider { radius: 1.0 },
+        Velocity(Vector2::zero()),
+        Movable,
         CameraRenderingInfo {
             view,
             projection,
@@ -251,8 +257,8 @@ fn construct_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_obj: &Path,
     path_to_texture: &Path,
-) -> Result<(Mesh, MainTexture, MeshRenderingInfo)> {
-    let cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
+) -> Result<(Mesh, MainTexture, MeshRenderingInfo, CPUMesh)> {
+    let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
 
     if cpu_mesh.len() == 0 {
         return Err(anyhow::anyhow!(
@@ -318,6 +324,7 @@ fn construct_mesh(
             uniform_buffers,
             descriptor_sets,
         },
+        cpu_mesh.remove(0),
     ))
 }
 
@@ -335,8 +342,10 @@ fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         .join("png")
         .join("walls.png");
 
-    let (mesh, main_texture, mesh_rendering_info) =
+    let (mesh, main_texture, mesh_rendering_info, cpu_mesh) =
         construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+
+    let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
 
     let position = vec3(0.0, 0.0, 0.0);
     let rotation = Quat::one();
@@ -345,16 +354,17 @@ fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         Position(position),
         Rotation(rotation),
         mesh,
+        mesh_collider,
         main_texture,
         mesh_rendering_info,
     ));
 }
 
-fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+fn spawn_imps(mut graphics: ResMut<Graphics>, mut commands: Commands) {
     log::info!("Spawn mesh");
 
     for pos_x in -2..3 {
-        let position = vec3((pos_x as f32) * 3.0, 0.0, 0.0);
+        let position = vec3((pos_x as f32) * 3.0, 0.0, 5.0);
         let rotation = Quat::one();
 
         let path_to_obj = std::env::current_dir()
@@ -368,7 +378,7 @@ fn spawn_mesh(mut graphics: ResMut<Graphics>, mut commands: Commands) {
             .join("meshes")
             .join("imphat_diffuse.png");
 
-        let (mesh, main_texture, mesh_rendering_info) =
+        let (mesh, main_texture, mesh_rendering_info, _) =
             construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let spawn = commands.spawn((
@@ -392,12 +402,13 @@ mod saga_renderer {
     use bevy_ecs::system::ResMut;
     use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
     use bevy_time::Time;
-    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, Rotation3, Vector2, Zero};
+    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, Rotation3, Zero};
     use vulkanalia::vk;
     use winit::event::VirtualKeyCode as Key;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
 
+    use super::saga_collision::Velocity;
     use super::saga_input::{ButtonInput, MouseChangeEvent};
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
     use super::{Imp, MeshRenderingInfo, MovementSpeed, Position, Rotation, TurnSpeed};
@@ -424,7 +435,6 @@ mod saga_renderer {
                 .add_systems(bevy_app::Update, animate_meshes)
                 .add_systems(bevy_app::Update, camera_movement)
                 .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
-                .add_systems(bevy_app::Update, camera_rotate_with_mouse_y)
                 .add_systems(bevy_app::PostUpdate, update_camera_view);
         }
     }
@@ -452,9 +462,8 @@ mod saga_renderer {
 
     #[rustfmt::skip]
     fn camera_movement(
-        time: Res<Time>,
         button_input: Res<ButtonInput>,
-        mut cameras: Query<(&mut Position, &Rotation, &Camera, &MovementSpeed)>
+        mut cameras: Query<(&Position, &Rotation, &mut Velocity, &Camera, &MovementSpeed)>
     ) {
         let movement_w = if button_input.is_key_down(Key::W) {1} else {0};
         let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
@@ -465,13 +474,11 @@ mod saga_renderer {
             (movement_d - movement_a) as f32, (movement_w - movement_s) as f32
         );
 
-        if movement == Vector2::zero() {
-            return;
+        if !movement.is_zero() {
+            movement = movement.normalize();
         }
 
-        movement = movement.normalize();
-
-        for (mut position, rotation, camera, movement_speed) in cameras.iter_mut() {
+        for (position, rotation, mut velocity, camera, movement_speed) in cameras.iter_mut() {
             let mut forward = rotation.forward();
             forward.y = 0.0;
             if !forward.is_zero() {
@@ -484,7 +491,9 @@ mod saga_renderer {
                 right = right.normalize();
             }
 
-            position.0 += (forward * movement.y + right * movement.x) * movement_speed.0 * time.delta_seconds();
+            let movement = (forward * movement.y + right * movement.x) * movement_speed.0;
+
+            velocity.0 = movement.xz();
         }
     }
 
@@ -1080,41 +1089,229 @@ mod saga_input {
 }
 
 mod saga_collision {
-    use bevy_ecs::component::Component;
+    use bevy_app::{App, Plugin};
+    use bevy_ecs::{
+        component::Component,
+        query::{With, Without},
+        system::{Query, Res},
+    };
+    use bevy_time::Time;
     use cgmath::{InnerSpace, Vector2, Zero};
+    use itertools::Itertools;
 
-    use super::saga_utils;
+    use crate::core::graphics::CPUMesh;
 
-    #[derive(Component)]
-    struct CircleCollider {
-        position: Vector2<f32>,
-        radius: f32,
-    }
+    use super::{saga_utils, Position, Rotation};
 
-    #[derive(Component)]
-    struct MeshCollider {}
-
-    #[derive(Clone, Copy)]
-    struct Circle {
-        position: Vector2<f32>,
-        radius: f32,
-    }
-
-    #[derive(Clone, Copy)]
-    struct Line(Vector2<f32>, Vector2<f32>);
-
-    impl Line {
-        fn len2(&self) -> f32 {
-            (self.1 - self.0).magnitude2()
+    pub struct CollisionPlugin;
+    impl Plugin for CollisionPlugin {
+        fn build(&self, app: &mut App) {
+            app.add_systems(bevy_app::Last, collision_system);
         }
     }
 
-    fn circle_line_penetration_time(
+    #[derive(Component)]
+    pub struct CircleCollider {
+        pub radius: f32,
+    }
+
+    #[derive(Component)]
+    pub struct MeshCollider {
+        lines: Vec<LineSegment>,
+    }
+
+    static TRIANGLE_SIZE: usize = 3;
+    impl From<CPUMesh> for MeshCollider {
+        fn from(mesh: CPUMesh) -> Self {
+            let all_line_segments: Vec<LineSegment> = mesh
+                .indices
+                .chunks(TRIANGLE_SIZE)
+                .map(|triangle| {
+                    let segments: Vec<LineSegment> = triangle
+                        .iter()
+                        .map(|&i| {
+                            // transform to flattened points
+                            mesh.vertices[i as usize].pos.xz()
+                        })
+                        .combinations(2)
+                        .map(|pair| LineSegment(pair[0], pair[1]))
+                        .collect();
+                    segments
+                })
+                .flatten()
+                .collect();
+
+            MeshCollider {
+                lines: all_line_segments,
+            }
+        }
+    }
+
+    #[derive(Component)]
+    pub struct Movable;
+
+    #[derive(Component)]
+    pub struct Velocity(pub Vector2<f32>);
+
+    #[derive(Clone, Copy)]
+    pub struct Circle {
+        position: Vector2<f32>,
+        radius: f32,
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct LineSegment(Vector2<f32>, Vector2<f32>);
+
+    impl LineSegment {
+        fn len2(&self) -> f32 {
+            self.direction().magnitude2()
+        }
+
+        fn len(&self) -> f32 {
+            self.direction().magnitude()
+        }
+
+        fn direction(&self) -> Vector2<f32> {
+            self.1 - self.0
+        }
+    }
+
+    fn sort_f32(a: &f32, b: &f32) -> std::cmp::Ordering {
+        a.partial_cmp(b).expect("Found NaN while sorting")
+    }
+
+    fn order_penetration_test_result(a: &PenetrationTestResult, b: &PenetrationTestResult) -> std::cmp::Ordering {
+        todo!()
+    }
+
+    fn collision_system(
+        time: Res<Time>,
+        movables: Query<(&mut Position, &Velocity, &CircleCollider), With<Movable>>,
+        static_objects: Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
+    ) {
+        unsafe {
+            for (index, (mut position, velocity, circle_collider)) in
+                movables.iter_unsafe().enumerate()
+            {
+                if velocity.0.is_zero() {
+                    continue;
+                }
+                let frame_delta = velocity.0 * time.delta_seconds();
+                let circle_bound = Circle {
+                    position: cgmath::vec2(position.0.x, position.0.z),
+                    radius: circle_collider.radius,
+                };
+
+                let collisions_with_dynamic_objects = movables.iter_unsafe().enumerate().map(
+                    |(index_dynamic, (position, _, circle_collider))| {
+                        if index == index_dynamic {
+                            return None;
+                        }
+                        let other_circle_bound = Circle {
+                            position: cgmath::vec2(position.0.x, position.0.z),
+                            radius: circle_collider.radius,
+                        };
+
+                        penetration_time_circle_circle(
+                            circle_bound,
+                            frame_delta,
+                            other_circle_bound,
+                        )
+                    },
+                );
+
+                let collisions_with_static_objects =
+                    static_objects
+                        .iter()
+                        .map(|(position, rotation, mesh_collider)| {
+                            mesh_collider
+                                .lines
+                                .iter()
+                                .map(|&segment| {
+                                    [
+                                        // We must test collision with the line and both endpoints
+                                        // since the line collision function ignore endpoints
+                                        penetration_time_circle_line(
+                                            circle_bound,
+                                            segment,
+                                            frame_delta,
+                                        ),
+                                        penetration_time_circle_point(
+                                            circle_bound,
+                                            segment.0,
+                                            frame_delta,
+                                        ),
+                                        penetration_time_circle_point(
+                                            circle_bound,
+                                            segment.1,
+                                            frame_delta,
+                                        ),
+                                    ]
+                                })
+                                .flatten()
+                                .flatten()
+                                .min_by(sort_f32)
+                        });
+
+                let mut penetration_time = collisions_with_static_objects
+                    // .chain(collisions_with_dynamic_objects)
+                    .flatten()
+                    .min_by(sort_f32)
+                    .unwrap_or(1.0);
+                if penetration_time > 1.0 {
+                    penetration_time = 1.0;
+                }
+
+                position.0 += cgmath::vec3(frame_delta.x, 0.0, frame_delta.y) * penetration_time;
+            }
+        }
+    }
+
+    pub enum PenetrationTestResult {
+        WillPenetrate {
+            earliest_time: f32,
+        },
+        AlreadyPenetrating {
+            exit_time: f32,
+        },
+        Never,
+    }
+
+    fn penetration_time_circle_circle(
+        moving_circle: Circle,
+        direction: Vector2<f32>,
+        stationary_circle: Circle,
+    ) -> Option<f32> {
+        // Have one circle donates its radius to the other
+        penetration_time_circle_point(
+            Circle {
+                position: moving_circle.position,
+                radius: moving_circle.radius + stationary_circle.radius,
+            },
+            stationary_circle.position,
+            direction,
+        )
+    }
+
+    fn penetration_time_circle_line(
         circle: Circle,
-        line: Line,
+        line_segment: LineSegment,
         direction: Vector2<f32>,
     ) -> Option<f32> {
         if direction.is_zero() {
+            return None;
+        }
+
+        let line_start_to_circle = circle.position - line_segment.0;
+        let displacement_projection_on_line = cgmath::dot(line_start_to_circle, line_segment.direction())
+            * line_segment.direction()
+            / line_segment.len2();
+
+        let normal_direction = line_start_to_circle - displacement_projection_on_line;
+
+        // this means the circle is moving perpendicular or away from the line segment
+        // we can skip computation
+        if cgmath::dot(normal_direction, direction) >= 0.0 {
             return None;
         }
 
@@ -1135,30 +1332,90 @@ mod saga_collision {
         // Let b = circle.position + direction
         // Let c = line.0
         // Let d = line.1
-        let badc = saga_utils::cross_2d(direction, line.1 - line.0);
-        let acdc = saga_utils::cross_2d(circle.position - line.0, line.1 - line.0);
+        let badc = saga_utils::cross_2d(
+            end_position - circle.position,
+            line_segment.1 - line_segment.0,
+        );
+        let acdc = saga_utils::cross_2d(
+            circle.position - line_segment.0,
+            line_segment.1 - line_segment.0,
+        );
 
         let quadratic_formula_a = badc * badc;
         let quadratic_formula_b = 2.0 * badc * acdc;
-        let quadratic_formula_c = acdc * acdc - circle.radius * circle.radius * line.len2();
+        let quadratic_formula_c = acdc * acdc - circle.radius * circle.radius * line_segment.len2();
 
-        if let Ok(solutions) = saga_utils::solve_quadratic(quadratic_formula_a, quadratic_formula_b, quadratic_formula_c) {
-            if let Some(&t) = solutions.get(0) {
-                let line_segment_intersects_cylinder = t >= 0.0 && t <= 1.0;
-                if !line_segment_intersects_cylinder {
-                    return None;
-                }
+        if let Ok(solutions) = saga_utils::solve_quadratic(
+            quadratic_formula_a,
+            quadratic_formula_b,
+            quadratic_formula_c,
+        ) {
+            let mut candidate_t = None;
+            let mut has_positive_solution = false;
+            let mut has_negative_solution = false;
+            let mut first_solution_valid = false;
+
+            for (index, &t) in solutions.iter().enumerate() {
+                has_negative_solution |= t < 0.0;
+                has_positive_solution |= t >= 0.0;
 
                 let p = direction * t + circle.position;
-                let projection_onto_line = cgmath::dot(p - line.0, line.1 - line.0);
+                let projection_onto_line =
+                    cgmath::dot(p - line_segment.0, line_segment.direction());
 
-                let line_intersects_cylinder_segment = projection_onto_line > 0.0 && projection_onto_line <= line.len2();
-                if !line_intersects_cylinder_segment {
-                    return None;
+                let line_intersects_cylinder_segment =
+                    projection_onto_line >= 0.0 && projection_onto_line <= line_segment.len2();
+
+                if index == 0 {
+                    first_solution_valid = line_intersects_cylinder_segment;
                 }
 
-                return Some(t);
+                let should_choose_this_t = line_intersects_cylinder_segment && t >= 0.0 && candidate_t == None;
+                if should_choose_this_t {
+                    candidate_t = Some(t);
+                }
             }
+
+            let is_already_penetrating = has_negative_solution && has_positive_solution && first_solution_valid;
+            if is_already_penetrating {
+                return Some(0.0);
+            }
+
+            return candidate_t;
+        }
+
+        None
+    }
+
+    fn penetration_time_circle_point(
+        circle: Circle,
+        point: Vector2<f32>,
+        direction: Vector2<f32>,
+    ) -> Option<f32> {
+        let circle_to_point = point - circle.position;
+
+        if cgmath::dot(-circle_to_point, direction) >= 0.0 {
+            return None;
+        }
+
+        let quadratic_formula_a = cgmath::dot(direction, direction);
+        let quadratic_formula_b = -2.0 * cgmath::dot(direction, circle_to_point);
+        let quadratic_formula_c =
+            cgmath::dot(circle_to_point, circle_to_point) - circle.radius * circle.radius;
+
+        let quadratic_solutions = saga_utils::solve_quadratic(
+            quadratic_formula_a,
+            quadratic_formula_b,
+            quadratic_formula_c,
+        );
+
+        if let Ok(quadratic_solutions) = quadratic_solutions {
+            let already_penetrated = quadratic_solutions.len() == 2 && quadratic_solutions[0] < 0.0 && quadratic_solutions[1] >= 0.0;
+            if already_penetrated {
+                return Some(0.0);
+            }
+
+            return quadratic_solutions.iter().cloned().find(|&t| t >= 0.0);
         }
 
         None
@@ -1167,10 +1424,7 @@ mod saga_collision {
 
 mod saga_utils {
     use anyhow::Result;
-    use cgmath::{
-        num_traits::Float,
-        Vector2,
-    };
+    use cgmath::{num_traits::Float, Vector2};
 
     pub fn cross_2d<F: Float>(a: Vector2<F>, b: Vector2<F>) -> F {
         a.x * b.y - a.y * b.x
@@ -1187,10 +1441,7 @@ mod saga_utils {
                 "There are infinitely many solutions to this"
             ));
         }
-
-        let mut d = b * b - 4.0 * a * c;
-        let no_real_solution = d < 0.0;
-        let no_solution = (a == 0.0 && b == 0.0) || no_real_solution; // implicit c != 0.0
+        let no_solution = a == 0.0 && b == 0.0; // implicit c != 0.0
         if no_solution {
             return Ok(vec![]);
         }
@@ -1198,6 +1449,14 @@ mod saga_utils {
         if one_solution_only {
             return Ok(vec![-c / b]);
         }
+
+        let mut d = b * b - 4.0 * a * c;
+        let no_real_solution = d < 0.0;
+        if no_real_solution {
+            return Ok(vec![]);
+        }
+
+        let one_solution_only = d == 0.0;
         if d == 0.0 {
             return Ok(vec![-b / (2.0 * a)]);
         }
@@ -1205,9 +1464,9 @@ mod saga_utils {
         d = d.sqrt();
 
         // Quadratic formula
-        let mut c1 = (-b - d) / 2.0 * a;
-        let mut c2 = (-b + d) / 2.0 * a;
-        if c2 > c1 {
+        let mut c1 = (-b - d) / (2.0 * a);
+        let mut c2 = (-b + d) / (2.0 * a);
+        if c1 > c2 {
             std::mem::swap(&mut c1, &mut c2);
         }
 
@@ -1220,10 +1479,11 @@ pub fn construct_app() -> App {
     app.add_plugins((
         saga_window::WindowPlugin,
         saga_renderer::Plugin,
+        saga_collision::CollisionPlugin,
         bevy_time::TimePlugin,
     ))
     .add_systems(bevy_app::Startup, spawn_camera)
-    .add_systems(bevy_app::Startup, spawn_mesh)
+    .add_systems(bevy_app::Startup, spawn_imps)
     .add_systems(bevy_app::Startup, spawn_map)
     .add_systems(bevy_app::PostStartup, finalize_descriptors);
 
