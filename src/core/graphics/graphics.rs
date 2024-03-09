@@ -738,7 +738,6 @@ pub mod graphics_utility {
 
     impl UniformBufferSeries {
         pub unsafe fn create_from_graphics<T>(graphics: &Graphics) -> Result<Self> {
-            log::info!("Create uniform buffer series");
             uniform_buffer::create_series::<T>(
                 &graphics.instance,
                 &graphics.device,
@@ -748,7 +747,6 @@ pub mod graphics_utility {
         }
 
         pub unsafe fn destroy_uniform_buffer_series(&self, graphics: &Graphics) {
-            log::info!("Destroyed uniform buffer series");
             uniform_buffer::destroy_series(&graphics.device, self);
         }
     }
@@ -817,8 +815,6 @@ pub mod graphics_utility {
 
     impl GPUMesh {
         pub unsafe fn create(graphics: &Graphics, mesh: &CPUMesh) -> Result<Self> {
-            log::info!("GPU mesh create");
-
             let vertex_buffer = VertexBuffer::create(
                 &graphics.instance,
                 &graphics.device,
@@ -847,7 +843,6 @@ pub mod graphics_utility {
         }
 
         pub unsafe fn destroy(&self, graphics: &Graphics) {
-            log::info!("Destroy GPU Mesh");
             VertexBuffer::destroy(self.vertex_buffer, &graphics.device);
             IndexBuffer::destroy(self.index_buffer, &graphics.device);
         }
@@ -855,7 +850,6 @@ pub mod graphics_utility {
 
     impl LoadedImage {
         pub unsafe fn create(graphics: &Graphics, image: &Image) -> Result<Self> {
-            log::info!("Load image to memory");
             LoadedImage::load_into_memory(
                 &image,
                 &graphics.instance,
@@ -867,19 +861,16 @@ pub mod graphics_utility {
         }
 
         pub unsafe fn destroy_with_graphics(&self, graphics: &Graphics) {
-            log::info!("Destroy image");
             self.destroy(&graphics.device)
         }
     }
 
     impl ImageSampler {
         pub unsafe fn create_from_graphics(graphics: &Graphics) -> Result<Self> {
-            log::info!("Create sampler");
             Self::create(&graphics.device)
         }
 
         pub unsafe fn destroy_with_graphics(&self, graphics: &Graphics) {
-            log::info!("Destroy sampler");
             self.destroy(&graphics.device)
         }
     }

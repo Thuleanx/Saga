@@ -328,9 +328,69 @@ fn construct_mesh(
     ))
 }
 
+fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+    let path_to_obj = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("meshes")
+        .join("gun.obj");
+    let path_to_texture = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("png")
+        .join("floor.png");
+
+    let (mesh, main_texture, mesh_rendering_info, _) =
+        construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+
+    let position = vec3(0.0, 2.0, 0.0);
+    let rotation = Quat::one();
+
+    let spawn = commands.spawn((
+        Position(position),
+        Rotation(rotation),
+        mesh,
+        main_texture,
+        mesh_rendering_info,
+        Imp,
+    ));
+}
+
 fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
     log::info!("Spawn map");
+    spawn_walls(&mut graphics, &mut commands);
+    spawn_floor(&mut graphics, &mut commands);
+}
 
+fn spawn_floor(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
+    let path_to_obj = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("meshes")
+        .join("map_ground.obj");
+    let path_to_texture = std::env::current_dir()
+        .unwrap()
+        .join("assets")
+        .join("png")
+        .join("floor.png");
+
+
+    let (mesh, main_texture, mesh_rendering_info, _) =
+        construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
+
+    let position = vec3(0.0, 0.0, 0.0);
+    let rotation = Quat::one();
+
+    let spawn = commands.spawn((
+        Position(position),
+        Rotation(rotation),
+        mesh,
+        main_texture,
+        mesh_rendering_info,
+    ));
+}
+
+fn spawn_walls(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
     let path_to_obj = std::env::current_dir()
         .unwrap()
         .join("assets")
@@ -343,7 +403,7 @@ fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         .join("walls.png");
 
     let (mesh, main_texture, mesh_rendering_info, cpu_mesh) =
-        construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+        construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
 
     let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
 
@@ -599,7 +659,7 @@ mod saga_renderer {
 
             position.0 = cgmath::vec3(
                 position.0.x,
-                (3.0 * (time + position.0.x)).sin(),
+                (3.0 * (time + position.0.x)).sin() + 2.0,
                 position.0.z,
             );
             rotation.0 = Matrix3::from_axis_angle(
@@ -742,10 +802,8 @@ mod saga_renderer {
         graphics: Res<Graphics>,
         meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) {
-        log::info!("[Saga] Cleaning up all meshes");
         let graphics = graphics.as_ref();
         for (mesh, main_texture, rendering_info) in &meshes {
-            log::info!("Cleanup...");
             unsafe {
                 rendering_info
                     .uniform_buffers
@@ -755,19 +813,19 @@ mod saga_renderer {
                 main_texture.sampler.destroy_with_graphics(&graphics);
             }
         }
+        log::info!("[Saga] Cleaning up all {} meshes", meshes.iter().count());
     }
 
     fn cleanup_camera(graphics: Res<Graphics>, cameras: Query<&CameraRenderingInfo>) {
-        log::info!("[Saga] Cleaning up all cameras");
         let graphics = graphics.as_ref();
         for camera_rendering_info in &cameras {
-            log::info!("Cleanup...");
             unsafe {
                 camera_rendering_info
                     .uniform_buffers
                     .destroy_uniform_buffer_series(&graphics);
             }
         }
+        log::info!("[Saga] Cleaning up all {} cameras", cameras.iter().count());
     }
 }
 
@@ -1603,8 +1661,8 @@ pub fn construct_app() -> App {
         bevy_time::TimePlugin,
     ))
     .add_systems(bevy_app::Startup, spawn_camera)
-    .add_systems(bevy_app::Startup, spawn_imps)
     .add_systems(bevy_app::Startup, spawn_map)
+    .add_systems(bevy_app::Startup, spawn_gun)
     .add_systems(bevy_app::PostStartup, finalize_descriptors);
 
     app
