@@ -28,8 +28,8 @@ impl ImageSampler {
 
 pub unsafe fn create_image_sampler(device: &Device) -> Result<vk::Sampler> {
     let info = vk::SamplerCreateInfo::builder()
-        .mag_filter(vk::Filter::LINEAR)
-        .min_filter(vk::Filter::LINEAR)
+        .mag_filter(vk::Filter::NEAREST)
+        .min_filter(vk::Filter::NEAREST)
         .address_mode_u(vk::SamplerAddressMode::REPEAT)
         .address_mode_w(vk::SamplerAddressMode::REPEAT)
         .address_mode_v(vk::SamplerAddressMode::REPEAT)

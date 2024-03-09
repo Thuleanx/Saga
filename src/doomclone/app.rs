@@ -1110,6 +1110,10 @@ mod saga_collision {
         }
     }
 
+    trait HasNormal {
+        fn get_normal_scaled(&self, position: Vector2<f32>) -> Vector2<f32>;
+    }
+
     #[derive(Component)]
     pub struct CircleCollider {
         pub radius: f32,
@@ -1159,6 +1163,12 @@ mod saga_collision {
         radius: f32,
     }
 
+    impl HasNormal for Circle {
+        fn get_normal_scaled(&self, position: Vector2<f32>) -> Vector2<f32> {
+            position - self.position
+        }
+    }
+
     #[derive(Clone, Copy)]
     pub struct LineSegment(Vector2<f32>, Vector2<f32>);
 
@@ -1176,104 +1186,214 @@ mod saga_collision {
         }
     }
 
+    /// Get the part of a that is perpendicular to b.
+    /// If b is 0 then return a
+    fn get_perpendicular(a: Vector2<f32>, b: Vector2<f32>) -> Vector2<f32> {
+        a - get_projection(a, b)
+    }
+
+    fn get_projection(a: Vector2<f32>, b: Vector2<f32>) -> Vector2<f32> {
+        if b.is_zero() {
+            Vector2::zero()
+        } else {
+            // Wow no sqrt isn't this cool
+            cgmath::dot(a, b) * b / b.magnitude2()
+        }
+    }
+
+    impl HasNormal for LineSegment {
+        fn get_normal_scaled(&self, position: Vector2<f32>) -> Vector2<f32> {
+            get_perpendicular(position - self.0, self.direction())
+        }
+    }
+
     fn sort_f32(a: &f32, b: &f32) -> std::cmp::Ordering {
         a.partial_cmp(b).expect("Found NaN while sorting")
     }
 
-    fn order_penetration_test_result(a: &PenetrationTestResult, b: &PenetrationTestResult) -> std::cmp::Ordering {
+    fn order_penetration_test_result(
+        a: &PenetrationTestResult,
+        b: &PenetrationTestResult,
+    ) -> std::cmp::Ordering {
         todo!()
+    }
+
+    enum Collision {
+        WithCircle { circle: Circle },
+        WithLineSegment { line_segment: LineSegment },
+        WithPoint { point: Vector2<f32> },
+        None,
     }
 
     fn collision_system(
         time: Res<Time>,
-        movables: Query<(&mut Position, &Velocity, &CircleCollider), With<Movable>>,
+        movables: Query<(&mut Position, &mut Velocity, &CircleCollider), With<Movable>>,
         static_objects: Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
     ) {
+        const MAX_TRANSLATIONS: usize = 5;
+        const MINIMUM_TRANSLATION_DISTANCE: f32 = 0.0001;
+
         unsafe {
-            for (index, (mut position, velocity, circle_collider)) in
+            for (index, (mut position, mut velocity, circle_collider)) in
                 movables.iter_unsafe().enumerate()
             {
                 if velocity.0.is_zero() {
                     continue;
                 }
-                let frame_delta = velocity.0 * time.delta_seconds();
+
+                let mut movement = velocity.0 * time.delta_seconds();
+
                 let circle_bound = Circle {
                     position: cgmath::vec2(position.0.x, position.0.z),
                     radius: circle_collider.radius,
                 };
 
-                let collisions_with_dynamic_objects = movables.iter_unsafe().enumerate().map(
-                    |(index_dynamic, (position, _, circle_collider))| {
-                        if index == index_dynamic {
-                            return None;
+                for _ in 0..MAX_TRANSLATIONS {
+                    if movement.magnitude2()
+                        < MINIMUM_TRANSLATION_DISTANCE * MINIMUM_TRANSLATION_DISTANCE
+                    {
+                        break;
+                    }
+
+                    let collision_result = get_first_collision(
+                        index,
+                        circle_bound,
+                        movement,
+                        &movables,
+                        &static_objects,
+                    );
+
+                    let (collision_time, collision_object) = collision_result;
+
+                    position.0 += cgmath::vec3(movement.x, 0.0, movement.y) * collision_time;
+                    movement = (1.0 - collision_time) * movement;
+
+                    let position_2d = position.0.xz();
+
+                    let scaled_normal = match collision_object {
+                        Collision::None => Vector2::zero(),
+                        Collision::WithCircle { circle } => circle.get_normal_scaled(position_2d),
+                        Collision::WithLineSegment { line_segment } => {
+                            line_segment.get_normal_scaled(position_2d)
                         }
-                        let other_circle_bound = Circle {
-                            position: cgmath::vec2(position.0.x, position.0.z),
-                            radius: circle_collider.radius,
-                        };
+                        Collision::WithPoint { point } => position_2d - point,
+                    };
 
-                        penetration_time_circle_circle(
-                            circle_bound,
-                            frame_delta,
-                            other_circle_bound,
-                        )
-                    },
-                );
-
-                let collisions_with_static_objects =
-                    static_objects
-                        .iter()
-                        .map(|(position, rotation, mesh_collider)| {
-                            mesh_collider
-                                .lines
-                                .iter()
-                                .map(|&segment| {
-                                    [
-                                        // We must test collision with the line and both endpoints
-                                        // since the line collision function ignore endpoints
-                                        penetration_time_circle_line(
-                                            circle_bound,
-                                            segment,
-                                            frame_delta,
-                                        ),
-                                        penetration_time_circle_point(
-                                            circle_bound,
-                                            segment.0,
-                                            frame_delta,
-                                        ),
-                                        penetration_time_circle_point(
-                                            circle_bound,
-                                            segment.1,
-                                            frame_delta,
-                                        ),
-                                    ]
-                                })
-                                .flatten()
-                                .flatten()
-                                .min_by(sort_f32)
-                        });
-
-                let mut penetration_time = collisions_with_static_objects
-                    // .chain(collisions_with_dynamic_objects)
-                    .flatten()
-                    .min_by(sort_f32)
-                    .unwrap_or(1.0);
-                if penetration_time > 1.0 {
-                    penetration_time = 1.0;
+                    velocity.0 = get_perpendicular(velocity.0, scaled_normal);
+                    movement = get_perpendicular(movement, scaled_normal);
                 }
-
-                position.0 += cgmath::vec3(frame_delta.x, 0.0, frame_delta.y) * penetration_time;
             }
         }
     }
 
+    unsafe fn get_first_collision(
+        movable_index: usize,
+        circle_bound: Circle,
+        direction: Vector2<f32>,
+        movables: &Query<(&mut Position, &mut Velocity, &CircleCollider), With<Movable>>,
+        static_objects: &Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
+    ) -> (f32, Collision) {
+        fn sort_result<T>(a: &(f32, T), b: &(f32, T)) -> std::cmp::Ordering {
+            sort_f32(&a.0, &b.0)
+        }
+
+        let collisions_with_dynamic_objects = movables.iter_unsafe().enumerate().map(
+            |(index_dynamic, (position, _, circle_collider))| {
+                if movable_index == index_dynamic {
+                    return None;
+                }
+                let other_circle_bound = Circle {
+                    position: position.0.xz(),
+                    radius: circle_collider.radius,
+                };
+
+                let penetration_time =
+                    penetration_time_circle_circle(circle_bound, direction, other_circle_bound);
+
+                if let Some(penetration_time) = penetration_time {
+                    Some((
+                        penetration_time,
+                        Collision::WithCircle {
+                            circle: other_circle_bound,
+                        },
+                    ))
+                } else {
+                    None
+                }
+            },
+        );
+
+        let collisions_with_static_objects =
+            static_objects
+                .iter()
+                .map(|(position, rotation, mesh_collider)| {
+                    mesh_collider
+                    .lines
+                    .iter()
+                    .map(|&segment| {
+                        let circle_line_penetration = match penetration_time_circle_line(
+                            circle_bound,
+                            segment,
+                            direction,
+                            ) {
+                            Some(t) => Some((
+                                    t,
+                                    Collision::WithLineSegment {
+                                        line_segment: segment,
+                                    },
+                                    )),
+                            None => None,
+                        };
+
+                        let circle_first_point_penetration =
+                            match penetration_time_circle_point(
+                                circle_bound,
+                                segment.0,
+                                direction,
+                                ) {
+                                Some(t) => {
+                                    Some((t, Collision::WithPoint { point: segment.0 }))
+                                }
+                                None => None,
+                            };
+
+                        let circle_second_point_penetration =
+                            match penetration_time_circle_point(
+                                circle_bound,
+                                segment.0,
+                                direction,
+                                ) {
+                                Some(t) => {
+                                    Some((t, Collision::WithPoint { point: segment.0 }))
+                                }
+                                None => None,
+                            };
+
+                        [
+                            // We must test collision with the line and both endpoints
+                            // since the line collision function ignore endpoints
+                            circle_line_penetration,
+                            circle_first_point_penetration,
+                            circle_second_point_penetration,
+                        ]
+                    })
+                .flatten()
+                    .flatten()
+                    .min_by(sort_result)
+                });
+
+        let collision_result = collisions_with_static_objects
+            .chain(collisions_with_dynamic_objects)
+            .flatten()
+            .chain([(1.0, Collision::None)])
+            .min_by(sort_result);
+
+        collision_result.unwrap()
+    }
+
     pub enum PenetrationTestResult {
-        WillPenetrate {
-            earliest_time: f32,
-        },
-        AlreadyPenetrating {
-            exit_time: f32,
-        },
+        WillPenetrate { earliest_time: f32 },
+        AlreadyPenetrating { exit_time: f32 },
         Never,
     }
 
@@ -1302,16 +1422,12 @@ mod saga_collision {
             return None;
         }
 
-        let line_start_to_circle = circle.position - line_segment.0;
-        let displacement_projection_on_line = cgmath::dot(line_start_to_circle, line_segment.direction())
-            * line_segment.direction()
-            / line_segment.len2();
-
-        let normal_direction = line_start_to_circle - displacement_projection_on_line;
+        let normal_direction = line_segment.get_normal_scaled(circle.position);
 
         // this means the circle is moving perpendicular or away from the line segment
         // we can skip computation
-        if cgmath::dot(normal_direction, direction) >= 0.0 {
+        let moving_away = cgmath::dot(normal_direction, direction) >= 0.0;
+        if moving_away {
             return None;
         }
 
@@ -1370,13 +1486,15 @@ mod saga_collision {
                     first_solution_valid = line_intersects_cylinder_segment;
                 }
 
-                let should_choose_this_t = line_intersects_cylinder_segment && t >= 0.0 && candidate_t == None;
+                let should_choose_this_t =
+                    line_intersects_cylinder_segment && t >= 0.0 && candidate_t == None;
                 if should_choose_this_t {
                     candidate_t = Some(t);
                 }
             }
 
-            let is_already_penetrating = has_negative_solution && has_positive_solution && first_solution_valid;
+            let is_already_penetrating =
+                has_negative_solution && has_positive_solution && first_solution_valid;
             if is_already_penetrating {
                 return Some(0.0);
             }
@@ -1410,7 +1528,9 @@ mod saga_collision {
         );
 
         if let Ok(quadratic_solutions) = quadratic_solutions {
-            let already_penetrated = quadratic_solutions.len() == 2 && quadratic_solutions[0] < 0.0 && quadratic_solutions[1] >= 0.0;
+            let already_penetrated = quadratic_solutions.len() == 2
+                && quadratic_solutions[0] < 0.0
+                && quadratic_solutions[1] >= 0.0;
             if already_penetrated {
                 return Some(0.0);
             }
