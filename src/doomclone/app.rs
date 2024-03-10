@@ -2,7 +2,7 @@ use crate::{
     core::graphics::{
         CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
     },
-    doomclone::app::saga_renderer::MeshUniformBufferObject,
+    doomclone::app::saga_renderer::MeshVertexUniformObject,
 };
 use anyhow::Result;
 use bevy_app::App;
@@ -10,6 +10,8 @@ use bevy_ecs::{component::Component, system::ResMut};
 use cgmath::{vec3, Angle, Vector2};
 use std::path::Path;
 use vulkanalia::prelude::v1_0::*;
+
+use self::saga_renderer::MeshFragmentUniformObject;
 
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
@@ -212,14 +214,15 @@ struct MainTexture {
 #[derive(Component)]
 struct MeshRenderingInfo {
     descriptor_sets: Vec<vk::DescriptorSet>,
-    uniform_buffers: UniformBufferSeries,
+    vertex_uniform_buffers: UniformBufferSeries,
+    fragment_uniform_buffers: UniformBufferSeries,
 }
 
 fn construct_mesh_with_cpu_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_texture: &Path,
     cpu_mesh: CPUMesh,
-) -> Result<(Mesh, MainTexture, MeshRenderingInfo, CPUMesh)> {
+) -> Result<(Mesh, MainTexture, MeshRenderingInfo, MeshFragmentUniformObject, CPUMesh)> {
     let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh).unwrap() };
 
     let texture = Image::load(&path_to_texture).unwrap();
@@ -237,8 +240,12 @@ fn construct_mesh_with_cpu_mesh(
             .unwrap()
     };
 
-    let uniform_buffers = unsafe {
-        UniformBufferSeries::create_from_graphics::<MeshUniformBufferObject>(&graphics).unwrap()
+    let vertex_uniform_buffers = unsafe {
+        UniformBufferSeries::create_from_graphics::<MeshVertexUniformObject>(&graphics).unwrap()
+    };
+
+    let fragment_uniform_buffers = unsafe {
+        UniformBufferSeries::create_from_graphics::<MeshFragmentUniformObject>(&graphics).unwrap()
     };
 
     let device = graphics.get_device().clone();
@@ -250,7 +257,7 @@ fn construct_mesh_with_cpu_mesh(
         1,
     );
 
-    uniform_buffers
+    vertex_uniform_buffers
         .get_buffers()
         .iter()
         .cloned()
@@ -259,11 +266,28 @@ fn construct_mesh_with_cpu_mesh(
             let device = graphics.get_device().clone();
             graphics
                 .descriptor_writer
-                .queue_write_buffers::<MeshUniformBufferObject>(
+                .queue_write_buffers::<MeshVertexUniformObject>(
                     &device,
                     uniform_buffer,
                     &[descriptor_sets[index]],
                     0,
+                );
+        });
+
+    fragment_uniform_buffers
+        .get_buffers()
+        .iter()
+        .cloned()
+        .enumerate()
+        .for_each(|(index, uniform_buffer)| {
+            let device = graphics.get_device().clone();
+            graphics
+                .descriptor_writer
+                .queue_write_buffers::<MeshFragmentUniformObject>(
+                    &device,
+                    uniform_buffer,
+                    &[descriptor_sets[index]],
+                    2,
                 );
         });
 
@@ -274,8 +298,12 @@ fn construct_mesh_with_cpu_mesh(
             sampler: texture_sampler,
         },
         MeshRenderingInfo {
-            uniform_buffers,
+            vertex_uniform_buffers,
+            fragment_uniform_buffers,
             descriptor_sets,
+        },
+        MeshFragmentUniformObject {
+            tint: cgmath::vec4(1.0, 1.0, 1.0, 1.0),
         },
         cpu_mesh,
     ))
@@ -285,7 +313,7 @@ fn construct_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_obj: &Path,
     path_to_texture: &Path,
-) -> Result<(Mesh, MainTexture, MeshRenderingInfo, CPUMesh)> {
+) -> Result<(Mesh, MainTexture, MeshRenderingInfo, MeshFragmentUniformObject, CPUMesh)> {
     let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
 
     if cpu_mesh.len() == 0 {
@@ -551,7 +579,7 @@ mod doomclone_game {
             .join("png")
             .join("gun_texture.png");
 
-        let (mesh, main_texture, mesh_rendering_info, _) =
+        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
             construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let position = cgmath::vec3(0.0, 0.0, 0.0);
@@ -566,6 +594,7 @@ mod doomclone_game {
             mesh,
             main_texture,
             mesh_rendering_info,
+            mesh_fragment_info,
         ));
     }
 
@@ -578,7 +607,7 @@ mod doomclone_game {
 
         let cpu_mesh = CPUMesh::get_simple_plane();
 
-        let (mesh, main_texture, mesh_rendering_info, _) =
+        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
             construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
 
         let spawn = commands.spawn((
@@ -590,6 +619,7 @@ mod doomclone_game {
             mesh,
             main_texture,
             mesh_rendering_info,
+            mesh_fragment_info,
         ));
     }
 
@@ -611,7 +641,7 @@ mod doomclone_game {
             .join("png")
             .join("floor.png");
 
-        let (mesh, main_texture, mesh_rendering_info, _) =
+        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
             construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let position = cgmath::vec3(0.0, 0.0, 0.0);
@@ -623,6 +653,7 @@ mod doomclone_game {
             mesh,
             main_texture,
             mesh_rendering_info,
+            mesh_fragment_info,
         ));
     }
 
@@ -638,7 +669,7 @@ mod doomclone_game {
             .join("png")
             .join("walls.png");
 
-        let (mesh, main_texture, mesh_rendering_info, cpu_mesh) =
+        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, cpu_mesh) =
             construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
@@ -653,6 +684,7 @@ mod doomclone_game {
             mesh_collider,
             main_texture,
             mesh_rendering_info,
+            mesh_fragment_info,
         ));
     }
 
@@ -726,7 +758,7 @@ mod saga_renderer {
     use bevy_app::Plugin as BevyPlugin;
     use bevy_ecs::system::ResMut;
     use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
-    use cgmath::{Matrix3, Matrix4, SquareMatrix};
+    use cgmath::{Matrix3, Matrix4, SquareMatrix, Vector4};
     use vulkanalia::vk;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
@@ -753,6 +785,8 @@ mod saga_renderer {
                     build_command_buffer.pipe(log_error_result),
                 )
                 .add_systems(bevy_app::Update, camera_on_screen_resize)
+                .add_systems(bevy_app::PostUpdate, update_mesh_fragment_information_on_change)
+                .add_systems(bevy_app::PostStartup, update_mesh_fragment_information_on_post_startup)
                 .add_systems(bevy_app::PostStartup, finalize_descriptors)
                 .add_systems(bevy_app::PostUpdate, update_camera_view);
         }
@@ -775,8 +809,14 @@ mod saga_renderer {
 
     #[repr(C)]
     #[derive(Copy, Clone, Debug)]
-    pub struct MeshUniformBufferObject {
+    pub struct MeshVertexUniformObject {
         pub model: Matrix4<f32>,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Component)]
+    pub struct MeshFragmentUniformObject {
+        pub tint: Vector4<f32>,
     }
 
     fn camera_on_screen_resize(
@@ -837,6 +877,42 @@ mod saga_renderer {
         graphics.descriptor_writer.write(graphics.get_device());
     }
 
+    pub fn update_mesh_fragment_information(
+        graphics: &ResMut<Graphics>,
+        mesh_rendering_info: &MeshRenderingInfo,
+        mesh_fragment_info: &MeshFragmentUniformObject,
+    ) -> Result<()> {
+        let number_of_buffers_to_update = mesh_rendering_info.fragment_uniform_buffers.get_number_of_buffers();
+        for index in 0..number_of_buffers_to_update {
+            unsafe {
+                graphics.update_uniform_buffer_series(
+                    &mesh_rendering_info.fragment_uniform_buffers,
+                    index,
+                    &mesh_fragment_info,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn update_mesh_fragment_information_on_change(
+        graphics: ResMut<Graphics>,
+        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject), Changed<MeshFragmentUniformObject>>
+    ) {
+        for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
+            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info).unwrap();
+        }
+    }
+
+    fn update_mesh_fragment_information_on_post_startup(
+        graphics: ResMut<Graphics>,
+        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject)>
+    ) {
+        for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
+            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info).unwrap();
+        }
+    }
+
     fn update_mesh_transform_information(
         graphics: &ResMut<Graphics>,
         mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo, Option<&Scale>)>,
@@ -851,13 +927,13 @@ mod saga_renderer {
             };
             let model = translation_matrix * rotation_matrix * scale_matrix;
 
-            let ubo = MeshUniformBufferObject { model };
+            let ubo = MeshVertexUniformObject { model };
 
-            let number_of_buffers_to_update = rendering_info.uniform_buffers.get_buffers().len();
+            let number_of_buffers_to_update = rendering_info.vertex_uniform_buffers.get_buffers().len();
             for index in 0..number_of_buffers_to_update {
                 unsafe {
                     graphics.update_uniform_buffer_series(
-                        &rendering_info.uniform_buffers,
+                        &rendering_info.vertex_uniform_buffers,
                         index,
                         &ubo,
                     )?;
@@ -978,7 +1054,10 @@ mod saga_renderer {
         for (mesh, main_texture, rendering_info) in &meshes {
             unsafe {
                 rendering_info
-                    .uniform_buffers
+                    .vertex_uniform_buffers
+                    .destroy_uniform_buffer_series(&graphics);
+                rendering_info
+                    .fragment_uniform_buffers
                     .destroy_uniform_buffer_series(&graphics);
                 mesh.gpu_mesh.destroy(&graphics);
                 main_texture.texture.destroy_with_graphics(&graphics);

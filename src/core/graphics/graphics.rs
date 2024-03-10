@@ -201,6 +201,12 @@ impl Graphics {
                         descriptor_count: 1,
                         stage_flags: vk::ShaderStageFlags::FRAGMENT,
                     },
+                    descriptor::layout::DescriptorInfo {
+                        binding: 2,
+                        descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                        descriptor_count: 1,
+                        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                    },
                 ],
             )?
         };
@@ -247,7 +253,7 @@ impl Graphics {
             &[
                 descriptor::pool::PoolDescription {
                     type_: vk::DescriptorType::UNIFORM_BUFFER,
-                    descriptor_count: 1,
+                    descriptor_count: 2,
                 },
                 descriptor::pool::PoolDescription {
                     type_: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,

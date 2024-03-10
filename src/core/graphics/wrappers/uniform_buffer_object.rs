@@ -28,6 +28,10 @@ pub mod uniform_buffer {
             None
         }
 
+        pub fn get_number_of_buffers(&self) -> usize {
+            self.buffers.len()
+        }
+
         pub fn get_buffers(&self) -> &[vk::Buffer] {
             &self.buffers
         }
