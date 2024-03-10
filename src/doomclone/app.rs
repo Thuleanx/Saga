@@ -1,30 +1,19 @@
-use std::path::Path;
-
-use self::saga_renderer::CameraUniformBufferObject;
 use crate::{
     core::graphics::{
         CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
     },
-    doomclone::app::{
-        saga_collision::{CircleCollider, MeshCollider, Movable, Velocity},
-        saga_renderer::MeshUniformBufferObject,
-    },
+    doomclone::app::saga_renderer::MeshUniformBufferObject,
 };
 use anyhow::Result;
 use bevy_app::App;
-use bevy_ecs::{
-    component::Component,
-    system::{Commands, Res, ResMut},
-};
-use cgmath::{vec3, Angle, Deg, One, Vector2, Zero};
+use bevy_ecs::{component::Component, system::ResMut};
+use cgmath::{vec3, Angle, Vector2};
+use std::path::Path;
 use vulkanalia::prelude::v1_0::*;
 
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 type Quat = cgmath::Quaternion<f32>;
-
-#[derive(Component)]
-struct Imp;
 
 #[derive(Component)]
 struct Position(Vec3);
@@ -187,72 +176,6 @@ struct MeshRenderingInfo {
     uniform_buffers: UniformBufferSeries,
 }
 
-fn spawn_camera(
-    window: Res<saga_window::Window>,
-    mut graphics: ResMut<Graphics>,
-    mut commands: Commands,
-) {
-    log::info!("Spawn camera");
-    let position = Position(vec3(0.0, 2.0, -0.0));
-    let rotation = Rotation(Quat::one());
-    let movement_speed = MovementSpeed(8.0);
-    let turn_speed = TurnSpeed(cgmath::vec2(
-        cgmath::Rad(1.0 / 100.0),
-        cgmath::Rad(1.0 / 100.0),
-    ));
-
-    let size = window.window.inner_size();
-
-    let uniform_buffers = unsafe {
-        UniformBufferSeries::create_from_graphics::<CameraUniformBufferObject>(&graphics).unwrap()
-    };
-
-    uniform_buffers
-        .get_buffers()
-        .iter()
-        .cloned()
-        .enumerate()
-        .for_each(|(index, uniform_buffer)| {
-            let descriptor_set = graphics.global_descriptor_sets[index];
-            let device = graphics.get_device().clone();
-            graphics
-                .descriptor_writer
-                .queue_write_buffers::<CameraUniformBufferObject>(
-                    &device,
-                    uniform_buffer,
-                    &[descriptor_set],
-                    0,
-                )
-        });
-
-    let camera = Camera {
-        field_of_view: Deg(45.0).into(),
-        far_plane_distance: 100.0,
-        near_plane_distance: 0.1,
-        width: size.width,
-        height: size.height,
-    };
-
-    let view = Camera::calculate_view_matrix(&position, &rotation);
-    let projection = camera.calculate_projection_matrix();
-
-    let spawn = commands.spawn((
-        position,
-        rotation,
-        movement_speed,
-        turn_speed,
-        camera,
-        CircleCollider { radius: 1.0 },
-        Velocity(Vector2::zero()),
-        Movable,
-        CameraRenderingInfo {
-            view,
-            projection,
-            uniform_buffers,
-        },
-    ));
-}
-
 fn construct_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_obj: &Path,
@@ -328,196 +251,53 @@ fn construct_mesh(
     ))
 }
 
-fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
-    let path_to_obj = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("meshes")
-        .join("gun.obj");
-    let path_to_texture = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("png")
-        .join("floor.png");
-
-    let (mesh, main_texture, mesh_rendering_info, _) =
-        construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
-
-    let position = vec3(0.0, 2.0, 0.0);
-    let rotation = Quat::one();
-
-    let spawn = commands.spawn((
-        Position(position),
-        Rotation(rotation),
-        mesh,
-        main_texture,
-        mesh_rendering_info,
-        Imp,
-    ));
-}
-
-fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
-    log::info!("Spawn map");
-    spawn_walls(&mut graphics, &mut commands);
-    spawn_floor(&mut graphics, &mut commands);
-}
-
-fn spawn_floor(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
-    let path_to_obj = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("meshes")
-        .join("map_ground.obj");
-    let path_to_texture = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("png")
-        .join("floor.png");
-
-
-    let (mesh, main_texture, mesh_rendering_info, _) =
-        construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
-
-    let position = vec3(0.0, 0.0, 0.0);
-    let rotation = Quat::one();
-
-    let spawn = commands.spawn((
-        Position(position),
-        Rotation(rotation),
-        mesh,
-        main_texture,
-        mesh_rendering_info,
-    ));
-}
-
-fn spawn_walls(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
-    let path_to_obj = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("meshes")
-        .join("map_walls.obj");
-    let path_to_texture = std::env::current_dir()
-        .unwrap()
-        .join("assets")
-        .join("png")
-        .join("walls.png");
-
-    let (mesh, main_texture, mesh_rendering_info, cpu_mesh) =
-        construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
-
-    let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
-
-    let position = vec3(0.0, 0.0, 0.0);
-    let rotation = Quat::one();
-
-    let spawn = commands.spawn((
-        Position(position),
-        Rotation(rotation),
-        mesh,
-        mesh_collider,
-        main_texture,
-        mesh_rendering_info,
-    ));
-}
-
-fn spawn_imps(mut graphics: ResMut<Graphics>, mut commands: Commands) {
-    log::info!("Spawn mesh");
-
-    for pos_x in -2..3 {
-        let position = vec3((pos_x as f32) * 3.0, 0.0, 5.0);
-        let rotation = Quat::one();
-
-        let path_to_obj = std::env::current_dir()
-            .unwrap()
-            .join("assets")
-            .join("meshes")
-            .join("Imphat.obj");
-        let path_to_texture = std::env::current_dir()
-            .unwrap()
-            .join("assets")
-            .join("meshes")
-            .join("imphat_diffuse.png");
-
-        let (mesh, main_texture, mesh_rendering_info, _) =
-            construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
-
-        let spawn = commands.spawn((
-            Position(position),
-            Rotation(rotation),
-            Imp,
-            mesh,
-            main_texture,
-            mesh_rendering_info,
-        ));
-    }
-}
-
-fn finalize_descriptors(graphics: ResMut<Graphics>) {
-    graphics.descriptor_writer.write(graphics.get_device());
-}
-
-mod saga_renderer {
-    use anyhow::Result;
-    use bevy_app::Plugin as BevyPlugin;
-    use bevy_ecs::system::ResMut;
-    use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
+mod doomclone_game {
+    use super::{
+        construct_mesh, saga_collision::MeshCollider, saga_input::{ButtonInput, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, Rotation, TurnSpeed
+    };
+    use crate::{
+        core::graphics::{Graphics, UniformBufferSeries},
+        doomclone::app::{
+            saga_collision::{CircleCollider, Movable, Velocity},
+            Camera, CameraRenderingInfo,
+        },
+    };
+    use bevy_app::{App, Plugin};
+    use bevy_ecs::{
+        component::Component, event::EventReader, query::With, system::{Commands, Query, Res, ResMut}
+    };
     use bevy_time::Time;
-    use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, Rotation3, Zero};
-    use vulkanalia::vk;
+    use cgmath::{Deg, InnerSpace, One, Quaternion, Rad, Rotation3, Vector2, Zero};
     use winit::event::VirtualKeyCode as Key;
 
-    use crate::core::graphics::{Graphics, StartRenderResult};
+    type Quat = cgmath::Quaternion<f32>;
 
-    use super::saga_collision::Velocity;
-    use super::saga_input::{ButtonInput, MouseChangeEvent};
-    use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
-    use super::{Imp, MeshRenderingInfo, MovementSpeed, Position, Rotation, TurnSpeed};
+    pub struct GamePlugin;
 
-    pub struct Plugin;
-
-    impl BevyPlugin for Plugin {
-        fn build(&self, app: &mut bevy_app::App) {
-            app.add_event::<Resize>()
-                .init_schedule(Cleanup)
-                .add_systems(
-                    bevy_app::Last,
-                    draw.pipe(handle_swapchain_recreate)
-                        .pipe(recreate_swapchain)
-                        .pipe(log_error_result),
-                )
-                .add_systems(Cleanup, cleanup_camera)
-                .add_systems(Cleanup, cleanup_meshes)
-                .add_systems(
-                    bevy_app::PostStartup,
-                    build_command_buffer.pipe(log_error_result),
-                )
-                .add_systems(bevy_app::Update, camera_on_screen_resize)
-                .add_systems(bevy_app::Update, animate_meshes)
+    impl Plugin for GamePlugin {
+        fn build(&self, app: &mut App) {
+            app.add_systems(bevy_app::Startup, spawn_camera)
+                .add_systems(bevy_app::Startup, spawn_map)
+                .add_systems(bevy_app::Startup, spawn_gun)
                 .add_systems(bevy_app::Update, camera_movement)
-                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
-                .add_systems(bevy_app::PostUpdate, update_camera_view);
+                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x);
         }
     }
 
-    // Events
-    #[derive(bevy_ecs::event::Event)]
-    pub struct Resize;
+    #[derive(Component)]
+    struct Player;
 
-    // Schedules
-    #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
-    pub struct Cleanup;
+    #[derive(Component)]
+    struct Gun;
 
-    #[repr(C)]
-    #[derive(Copy, Clone, Debug)]
-    pub struct CameraUniformBufferObject {
-        pub view: Matrix4<f32>,
-        pub proj: Matrix4<f32>,
-    }
+    #[derive(Component)]
+    pub struct Imp;
 
-    #[repr(C)]
-    #[derive(Copy, Clone, Debug)]
-    pub struct MeshUniformBufferObject {
-        pub model: Matrix4<f32>,
+    fn animate_gun(
+        time: Res<Time>,
+        gun: Query<(&mut Position, &mut Rotation), With<Gun>>,
+        player: Query<(&Position, &Rotation)>,
+    ) {
     }
 
     #[rustfmt::skip]
@@ -593,6 +373,252 @@ mod saga_renderer {
         }
     }
 
+    fn spawn_imps(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        log::info!("Spawn mesh");
+
+        for pos_x in -2..3 {
+            let position = cgmath::vec3((pos_x as f32) * 3.0, 0.0, 5.0);
+            let rotation = Quat::one();
+
+            let path_to_obj = std::env::current_dir()
+                .unwrap()
+                .join("assets")
+                .join("meshes")
+                .join("Imphat.obj");
+            let path_to_texture = std::env::current_dir()
+                .unwrap()
+                .join("assets")
+                .join("meshes")
+                .join("imphat_diffuse.png");
+
+            let (mesh, main_texture, mesh_rendering_info, _) =
+                construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+
+            let spawn = commands.spawn((
+                Position(position),
+                Rotation(rotation),
+                Imp,
+                mesh,
+                main_texture,
+                mesh_rendering_info,
+            ));
+        }
+    }
+
+    fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        let path_to_obj = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("meshes")
+            .join("gun.obj");
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("gun_texture.png");
+
+        let (mesh, main_texture, mesh_rendering_info, _) =
+            construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
+
+        let position = cgmath::vec3(0.0, 2.0, 0.0);
+        let rotation = Quat::one();
+
+        let spawn = commands.spawn((
+            Position(position),
+            Rotation(rotation),
+            mesh,
+            main_texture,
+            mesh_rendering_info,
+            Gun,
+        ));
+    }
+
+    fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        log::info!("Spawn map");
+        spawn_walls(&mut graphics, &mut commands);
+        spawn_floor(&mut graphics, &mut commands);
+    }
+
+    fn spawn_floor(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
+        let path_to_obj = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("meshes")
+            .join("map_ground.obj");
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("floor.png");
+
+        let (mesh, main_texture, mesh_rendering_info, _) =
+            construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
+
+        let position = cgmath::vec3(0.0, 0.0, 0.0);
+        let rotation = Quat::one();
+
+        let spawn = commands.spawn((
+            Position(position),
+            Rotation(rotation),
+            mesh,
+            main_texture,
+            mesh_rendering_info,
+        ));
+    }
+
+    fn spawn_walls(graphics: &mut ResMut<Graphics>, commands: &mut Commands) {
+        let path_to_obj = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("meshes")
+            .join("map_walls.obj");
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("walls.png");
+
+        let (mesh, main_texture, mesh_rendering_info, cpu_mesh) =
+            construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
+
+        let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
+
+        let position = cgmath::vec3(0.0, 0.0, 0.0);
+        let rotation = Quat::one();
+
+        let spawn = commands.spawn((
+            Position(position),
+            Rotation(rotation),
+            mesh,
+            mesh_collider,
+            main_texture,
+            mesh_rendering_info,
+        ));
+    }
+
+    fn spawn_camera(window: Res<Window>, mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        log::info!("Spawn camera");
+        let position = Position(cgmath::vec3(0.0, 2.0, -0.0));
+        let rotation = Rotation(Quat::one());
+        let movement_speed = MovementSpeed(8.0);
+        let turn_speed = TurnSpeed(cgmath::vec2(
+            cgmath::Rad(1.0 / 100.0),
+            cgmath::Rad(1.0 / 100.0),
+        ));
+
+        let size = window.window.inner_size();
+
+        let uniform_buffers = unsafe {
+            UniformBufferSeries::create_from_graphics::<CameraUniformBufferObject>(&graphics)
+                .unwrap()
+        };
+
+        uniform_buffers
+            .get_buffers()
+            .iter()
+            .cloned()
+            .enumerate()
+            .for_each(|(index, uniform_buffer)| {
+                let descriptor_set = graphics.global_descriptor_sets[index];
+                let device = graphics.get_device().clone();
+                graphics
+                    .descriptor_writer
+                    .queue_write_buffers::<CameraUniformBufferObject>(
+                        &device,
+                        uniform_buffer,
+                        &[descriptor_set],
+                        0,
+                    )
+            });
+
+        let camera = Camera {
+            field_of_view: Deg(45.0).into(),
+            far_plane_distance: 100.0,
+            near_plane_distance: 0.1,
+            width: size.width,
+            height: size.height,
+        };
+
+        let view = Camera::calculate_view_matrix(&position, &rotation);
+        let projection = camera.calculate_projection_matrix();
+
+        let spawn = commands.spawn((
+            position,
+            rotation,
+            movement_speed,
+            turn_speed,
+            camera,
+            CircleCollider { radius: 1.0 },
+            Velocity(Vector2::zero()),
+            Movable,
+            CameraRenderingInfo {
+                view,
+                projection,
+                uniform_buffers,
+            },
+        ));
+    }
+}
+
+mod saga_renderer {
+    use anyhow::Result;
+    use bevy_app::Plugin as BevyPlugin;
+    use bevy_ecs::system::ResMut;
+    use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
+    use cgmath::{Matrix3, Matrix4};
+    use vulkanalia::vk;
+
+    use crate::core::graphics::{Graphics, StartRenderResult};
+
+    use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
+    use super::{MeshRenderingInfo, Position, Rotation};
+
+    pub struct Plugin;
+
+    impl BevyPlugin for Plugin {
+        fn build(&self, app: &mut bevy_app::App) {
+            app.add_event::<Resize>()
+                .init_schedule(Cleanup)
+                .add_systems(
+                    bevy_app::Last,
+                    draw.pipe(handle_swapchain_recreate)
+                        .pipe(recreate_swapchain)
+                        .pipe(log_error_result),
+                )
+                .add_systems(Cleanup, cleanup_camera)
+                .add_systems(Cleanup, cleanup_meshes)
+                .add_systems(
+                    bevy_app::PostStartup,
+                    build_command_buffer.pipe(log_error_result),
+                )
+                .add_systems(bevy_app::Update, camera_on_screen_resize)
+                .add_systems(bevy_app::PostStartup, finalize_descriptors)
+                .add_systems(bevy_app::PostUpdate, update_camera_view);
+        }
+    }
+
+    // Events
+    #[derive(bevy_ecs::event::Event)]
+    pub struct Resize;
+
+    // Schedules
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
+    pub struct Cleanup;
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct CameraUniformBufferObject {
+        pub view: Matrix4<f32>,
+        pub proj: Matrix4<f32>,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
+    pub struct MeshUniformBufferObject {
+        pub model: Matrix4<f32>,
+    }
+
+
     fn camera_on_screen_resize(
         mut resize_event: EventReader<Resize>,
         window: Res<Window>,
@@ -647,27 +673,8 @@ mod saga_renderer {
         }
     }
 
-    fn animate_meshes(
-        time: Res<Time>,
-        mut mesh_query: Query<(&mut Position, &mut Rotation, &Mesh), With<Imp>>,
-    ) {
-        for (mut position, mut rotation, mesh) in mesh_query.iter_mut() {
-            let time = time.elapsed().as_secs_f32();
-            // let time = graphics.get_start_time().elapsed().as_secs_f32();
-            // let model = Matrix4::from_axis_angle(vec3(0.0, 0.0, 1.0), Deg(90.0 * time))
-            //     * Matrix4::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(90.0));
-
-            position.0 = cgmath::vec3(
-                position.0.x,
-                (3.0 * (time + position.0.x)).sin() + 2.0,
-                position.0.z,
-            );
-            rotation.0 = Matrix3::from_axis_angle(
-                cgmath::vec3(0.0, 1.0, 0.0),
-                Deg((time + position.0.x) * 90.0),
-            )
-            .into();
-        }
+    fn finalize_descriptors(graphics: ResMut<Graphics>) {
+        graphics.descriptor_writer.write(graphics.get_device());
     }
 
     fn update_mesh_transform_information(
@@ -1659,11 +1666,8 @@ pub fn construct_app() -> App {
         saga_renderer::Plugin,
         saga_collision::CollisionPlugin,
         bevy_time::TimePlugin,
-    ))
-    .add_systems(bevy_app::Startup, spawn_camera)
-    .add_systems(bevy_app::Startup, spawn_map)
-    .add_systems(bevy_app::Startup, spawn_gun)
-    .add_systems(bevy_app::PostStartup, finalize_descriptors);
+        doomclone_game::GamePlugin,
+    ));
 
     app
 }
