@@ -34,6 +34,22 @@ pub struct CPUMesh {
     pub indices: Vec<Index>,
 }
 
+impl CPUMesh {
+    pub fn get_simple_plane() -> Self {
+        CPUMesh {
+            vertices: vec![
+                Vertex::new(cgmath::vec3(-0.5, -0.5, 0.0), cgmath::vec2(0.0, 1.0)),
+                Vertex::new(cgmath::vec3(0.5, -0.5, 0.0), cgmath::vec2(1.0, 1.0)),
+                Vertex::new(cgmath::vec3(-0.5, 0.5, 0.0), cgmath::vec2(0.0, 0.0)),
+                Vertex::new(cgmath::vec3(0.5, 0.5, 0.0), cgmath::vec2(1.0, 0.0)),
+            ],
+            indices: vec![
+                0, 1, 2, 2, 1, 3
+            ],
+        }
+    }
+}
+
 pub struct GPUMesh {
     triangles_count: usize,
     vertex_buffer: VertexBuffer,

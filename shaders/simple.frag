@@ -9,4 +9,7 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     outColor = texture(textureSampler, uv);
+    if (outColor.a == 0) {
+        discard;
+    }
 }

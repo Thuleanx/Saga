@@ -65,6 +65,9 @@ impl Rotation {
     }
 }
 
+#[derive(Component)]
+struct Scale(Vec3);
+
 impl RelativeRotation {
     fn forward(&self) -> Vec3 {
         self.0 * vec3(0.0, 0.0, 1.0)
@@ -100,7 +103,10 @@ impl Camera {
         // where the forward direction is the direction that the camera
         // fulstrum captures, and the up direction is the downwards camera direction
         let intermediate_matrix: Mat4 = Mat4::new(
-            1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 
+            0.0, -1.0, 0.0, 0.0, 
+            0.0, 0.0, -1.0, 0.0, 
+            0.0, 0.0, 0.0, 1.0,
         );
 
         let inverse_tan_half_fov: f32 = 1.0 / Angle::tan(self.field_of_view / 2.0);
@@ -151,7 +157,8 @@ impl Camera {
     fn calculate_view_matrix(position: &Position, rotation: &Rotation) -> Mat4 {
         let look: Vec3 = rotation.forward();
         let up: Vec3 = rotation.up();
-        let right: Vec3 = look.cross(up);
+        let right: Vec3 = rotation.right();
+            // look.cross(up);
 
         // this is row major
         //  in view space, camera captures in the opposite direction of the look
@@ -208,21 +215,12 @@ struct MeshRenderingInfo {
     uniform_buffers: UniformBufferSeries,
 }
 
-fn construct_mesh(
+fn construct_mesh_with_cpu_mesh(
     graphics: &mut ResMut<Graphics>,
-    path_to_obj: &Path,
     path_to_texture: &Path,
+    cpu_mesh: CPUMesh,
 ) -> Result<(Mesh, MainTexture, MeshRenderingInfo, CPUMesh)> {
-    let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
-
-    if cpu_mesh.len() == 0 {
-        return Err(anyhow::anyhow!(
-            "Provided obj file at path {:?} does not have a mesh",
-            path_to_obj
-        ));
-    }
-
-    let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh[0]).unwrap() };
+    let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh).unwrap() };
 
     let texture = Image::load(&path_to_texture).unwrap();
 
@@ -279,23 +277,40 @@ fn construct_mesh(
             uniform_buffers,
             descriptor_sets,
         },
-        cpu_mesh.remove(0),
+        cpu_mesh,
     ))
+}
+
+fn construct_mesh(
+    graphics: &mut ResMut<Graphics>,
+    path_to_obj: &Path,
+    path_to_texture: &Path,
+) -> Result<(Mesh, MainTexture, MeshRenderingInfo, CPUMesh)> {
+    let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
+
+    if cpu_mesh.len() == 0 {
+        return Err(anyhow::anyhow!(
+            "Provided obj file at path {:?} does not have a mesh",
+            path_to_obj
+        ));
+    }
+
+    construct_mesh_with_cpu_mesh(graphics, path_to_texture, cpu_mesh.remove(0))
 }
 
 mod doomclone_game {
     use std::ops::Not;
 
     use super::{
-        construct_mesh,
+        construct_mesh, construct_mesh_with_cpu_mesh,
         saga_collision::MeshCollider,
         saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
         saga_renderer::CameraUniformBufferObject,
         saga_window::Window,
-        MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, TurnSpeed,
+        MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed,
     };
     use crate::{
-        core::graphics::{Graphics, UniformBufferSeries},
+        core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
         doomclone::app::{
             saga_collision::{CircleCollider, Movable, Velocity},
             Camera, CameraRenderingInfo,
@@ -310,8 +325,7 @@ mod doomclone_game {
     };
     use bevy_time::Time;
     use cgmath::{
-        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation3, Vector2, Vector3,
-        Zero,
+        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3, Zero
     };
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
 
@@ -324,7 +338,9 @@ mod doomclone_game {
             app.add_systems(bevy_app::Startup, spawn_camera)
                 .add_systems(bevy_app::Startup, spawn_map)
                 .add_systems(bevy_app::Startup, spawn_gun)
+                .add_systems(bevy_app::Startup, spawn_enemy)
                 .add_systems(bevy_app::Update, animate_gun_shot)
+                .add_systems(bevy_app::Update, animate_look_at_player)
                 .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, camera_movement)
                 .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
@@ -335,6 +351,12 @@ mod doomclone_game {
 
     #[derive(Component)]
     struct Player;
+
+    #[derive(Component)]
+    struct Enemy;
+
+    #[derive(Component)]
+    struct LookAtPlayer;
 
     #[derive(Component)]
     struct Gun;
@@ -371,7 +393,6 @@ mod doomclone_game {
                 relative_position.0 = RESTING_POSITION;
                 relative_rotation.0 = resting_rotation;
             }
-
         }
 
         for (mut position, mut relative_position, mut rotation, mut relative_rotation) in
@@ -394,13 +415,7 @@ mod doomclone_game {
 
     fn animate_gun_shot(
         mut firing_event: EventReader<GunFire>,
-        mut gun: Query<
-            (
-                &mut RelativePosition,
-                &mut RelativeRotation,
-            ),
-            With<Gun>,
-        >,
+        mut gun: Query<(&mut RelativePosition, &mut RelativeRotation), With<Gun>>,
     ) {
         const FIRING_POSITION: Vector3<f32> = cgmath::vec3(-0.645, -0.582, 1.093);
         let firing_rotation: Quat = Quaternion::from(Euler {
@@ -417,14 +432,38 @@ mod doomclone_game {
         }
     }
 
-    fn player_shooting(mut mouse_button_events: EventReader<MouseButtonEvent>, mut player_fire_event: EventWriter<GunFire>) {
+    fn player_shooting(
+        mut mouse_button_events: EventReader<MouseButtonEvent>,
+        mut player_fire_event: EventWriter<GunFire>,
+    ) {
         for button_event in mouse_button_events.read() {
             let MouseButtonEvent { button, state } = button_event;
             if (*button, *state) == (MouseButton::Left, ElementState::Pressed) {
                 player_fire_event.send(GunFire);
             }
         }
+    }
 
+    fn animate_look_at_player(
+        mut meshes: Query<(&Position, &mut Rotation), (With<LookAtPlayer>, Without<Player>)>,
+        player: Query<&Position, With<Player>>,
+    ) {
+        for player_position in player.iter() {
+            for (position, mut rotation) in meshes.iter_mut() {
+                let mut look_direction = player_position.0 - position.0;
+                look_direction.y = 0.0;
+
+                let up = cgmath::vec3(0.0, 1.0, 0.0);
+
+                if look_direction.is_zero() {
+                    continue;
+                }
+                look_direction = -look_direction.normalize();
+                look_direction.x = -look_direction.x;
+
+                rotation.0 = Quaternion::look_at(-look_direction, up);
+            }
+        }
     }
 
     #[rustfmt::skip]
@@ -530,6 +569,30 @@ mod doomclone_game {
         ));
     }
 
+    fn spawn_enemy(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("seaborn.png");
+
+        let cpu_mesh = CPUMesh::get_simple_plane();
+
+        let (mesh, main_texture, mesh_rendering_info, _) =
+            construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
+
+        let spawn = commands.spawn((
+            Position(cgmath::vec3(0.0, 2.0, 0.0)),
+            Rotation(Quat::one()),
+            Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
+            CircleCollider { radius: 1.0 },
+            LookAtPlayer,
+            mesh,
+            main_texture,
+            mesh_rendering_info,
+        ));
+    }
+
     fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         log::info!("Spawn map");
         spawn_walls(&mut graphics, &mut commands);
@@ -595,7 +658,7 @@ mod doomclone_game {
 
     fn spawn_camera(window: Res<Window>, mut graphics: ResMut<Graphics>, mut commands: Commands) {
         log::info!("Spawn camera");
-        let position = Position(cgmath::vec3(0.0, 2.0, -0.0));
+        let position = Position(cgmath::vec3(0.0, 2.0, -4.0));
         let rotation = Rotation(Quat::one());
         let movement_speed = MovementSpeed(8.0);
         let turn_speed = TurnSpeed(cgmath::vec2(
@@ -663,13 +726,13 @@ mod saga_renderer {
     use bevy_app::Plugin as BevyPlugin;
     use bevy_ecs::system::ResMut;
     use bevy_ecs::{prelude::*, schedule::ScheduleLabel};
-    use cgmath::{Matrix3, Matrix4};
+    use cgmath::{Matrix3, Matrix4, SquareMatrix};
     use vulkanalia::vk;
 
     use crate::core::graphics::{Graphics, StartRenderResult};
 
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
-    use super::{MeshRenderingInfo, Position, Rotation};
+    use super::{MeshRenderingInfo, Position, Rotation, Scale};
 
     pub struct Plugin;
 
@@ -776,12 +839,17 @@ mod saga_renderer {
 
     fn update_mesh_transform_information(
         graphics: &ResMut<Graphics>,
-        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo)>,
+        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo, Option<&Scale>)>,
     ) -> Result<()> {
-        for (position, rotation, rendering_info) in mesh_query.iter() {
+        for (position, rotation, rendering_info, scale) in mesh_query.iter() {
             let rotation_matrix = Matrix4::from(Matrix3::from(rotation.0));
             let translation_matrix = Matrix4::from_translation(position.0);
-            let model = translation_matrix * rotation_matrix;
+            let scale_matrix = if let Some(scale) = scale {
+                Matrix4::from_nonuniform_scale(scale.0.x, scale.0.y, scale.0.z)
+            } else {
+                Matrix4::identity()
+            };
+            let model = translation_matrix * rotation_matrix * scale_matrix;
 
             let ubo = MeshUniformBufferObject { model };
 
@@ -833,7 +901,7 @@ mod saga_renderer {
         window: Res<Window>,
         mut graphics: ResMut<Graphics>,
         camera_query: Query<(&Camera, &CameraRenderingInfo)>,
-        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo)>,
+        mesh_query: Query<(&Position, &Rotation, &MeshRenderingInfo, Option<&Scale>)>,
     ) -> Result<bool> {
         let image_index = unsafe {
             match graphics.start_render(&window.window) {
