@@ -18,7 +18,22 @@ type Quat = cgmath::Quaternion<f32>;
 #[derive(Component)]
 struct Position(Vec3);
 
+#[derive(Component)]
+struct RelativePosition(Vec3);
+
 impl Position {
+    fn x(&self) -> f32 {
+        self.0.x
+    }
+    fn y(&self) -> f32 {
+        self.0.y
+    }
+    fn z(&self) -> f32 {
+        self.0.z
+    }
+}
+
+impl RelativePosition {
     fn x(&self) -> f32 {
         self.0.x
     }
@@ -33,7 +48,24 @@ impl Position {
 #[derive(Component)]
 struct Rotation(Quat);
 
+#[derive(Component)]
+struct RelativeRotation(Quat);
+
 impl Rotation {
+    fn forward(&self) -> Vec3 {
+        self.0 * vec3(0.0, 0.0, 1.0)
+    }
+
+    fn right(&self) -> Vec3 {
+        self.0 * vec3(-1.0, 0.0, 0.0)
+    }
+
+    fn up(&self) -> Vec3 {
+        self.0 * vec3(0.0, 1.0, 0.0)
+    }
+}
+
+impl RelativeRotation {
     fn forward(&self) -> Vec3 {
         self.0 * vec3(0.0, 0.0, 1.0)
     }
@@ -252,8 +284,15 @@ fn construct_mesh(
 }
 
 mod doomclone_game {
+    use std::ops::Not;
+
     use super::{
-        construct_mesh, saga_collision::MeshCollider, saga_input::{ButtonInput, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, Rotation, TurnSpeed
+        construct_mesh,
+        saga_collision::MeshCollider,
+        saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
+        saga_renderer::CameraUniformBufferObject,
+        saga_window::Window,
+        MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, TurnSpeed,
     };
     use crate::{
         core::graphics::{Graphics, UniformBufferSeries},
@@ -264,11 +303,17 @@ mod doomclone_game {
     };
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
-        component::Component, event::EventReader, query::With, system::{Commands, Query, Res, ResMut}
+        component::Component,
+        event::{EventReader, EventWriter},
+        query::{With, Without},
+        system::{Commands, Local, Query, Res, ResMut},
     };
     use bevy_time::Time;
-    use cgmath::{Deg, InnerSpace, One, Quaternion, Rad, Rotation3, Vector2, Zero};
-    use winit::event::VirtualKeyCode as Key;
+    use cgmath::{
+        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation3, Vector2, Vector3,
+        Zero,
+    };
+    use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
 
     type Quat = cgmath::Quaternion<f32>;
 
@@ -279,8 +324,12 @@ mod doomclone_game {
             app.add_systems(bevy_app::Startup, spawn_camera)
                 .add_systems(bevy_app::Startup, spawn_map)
                 .add_systems(bevy_app::Startup, spawn_gun)
+                .add_systems(bevy_app::Update, animate_gun_shot)
+                .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, camera_movement)
-                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x);
+                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
+                .add_systems(bevy_app::PostUpdate, animate_gun)
+                .add_event::<GunFire>();
         }
     }
 
@@ -290,14 +339,92 @@ mod doomclone_game {
     #[derive(Component)]
     struct Gun;
 
-    #[derive(Component)]
-    pub struct Imp;
+    #[derive(bevy_ecs::event::Event)]
+    struct GunFire;
 
     fn animate_gun(
+        mut is_not_first_frame: Local<bool>,
         time: Res<Time>,
-        gun: Query<(&mut Position, &mut Rotation), With<Gun>>,
-        player: Query<(&Position, &Rotation)>,
+        mut gun: Query<
+            (
+                &mut Position,
+                &mut RelativePosition,
+                &mut Rotation,
+                &mut RelativeRotation,
+            ),
+            With<Gun>,
+        >,
+        player: Query<(&Position, &Rotation), (With<Player>, Without<Gun>)>,
     ) {
+        const RESTING_POSITION: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
+
+        const POSITIONAL_SMOOTHING: f32 = 0.1;
+        const ROTATIONAL_SMOOTHING: f32 = 0.1;
+
+        let resting_rotation: Quat =
+            Quaternion::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg(180.0));
+
+        if is_not_first_frame.not() {
+            *is_not_first_frame = true;
+
+            for (_, mut relative_position, _, mut relative_rotation) in gun.iter_mut() {
+                relative_position.0 = RESTING_POSITION;
+                relative_rotation.0 = resting_rotation;
+            }
+
+        }
+
+        for (mut position, mut relative_position, mut rotation, mut relative_rotation) in
+            gun.iter_mut()
+        {
+            let smoothing_power = 1.0 - POSITIONAL_SMOOTHING.powf(time.delta_seconds());
+
+            relative_position.0 =
+                cgmath::VectorSpace::lerp(relative_position.0, RESTING_POSITION, smoothing_power);
+
+            relative_rotation.0 =
+                cgmath::Quaternion::slerp(relative_rotation.0, resting_rotation, smoothing_power);
+
+            for (player_position, player_rotation) in player.iter() {
+                position.0 = player_rotation.0 * relative_position.0 + player_position.0;
+                rotation.0 = player_rotation.0 * relative_rotation.0;
+            }
+        }
+    }
+
+    fn animate_gun_shot(
+        mut firing_event: EventReader<GunFire>,
+        mut gun: Query<
+            (
+                &mut RelativePosition,
+                &mut RelativeRotation,
+            ),
+            With<Gun>,
+        >,
+    ) {
+        const FIRING_POSITION: Vector3<f32> = cgmath::vec3(-0.645, -0.582, 1.093);
+        let firing_rotation: Quat = Quaternion::from(Euler {
+            x: Deg(-19.163),
+            y: Deg(181.413),
+            z: Deg(-5.326),
+        });
+
+        for _ in firing_event.read() {
+            for (mut relative_position, mut relative_rotation) in gun.iter_mut() {
+                relative_position.0 = FIRING_POSITION;
+                relative_rotation.0 = firing_rotation;
+            }
+        }
+    }
+
+    fn player_shooting(mut mouse_button_events: EventReader<MouseButtonEvent>, mut player_fire_event: EventWriter<GunFire>) {
+        for button_event in mouse_button_events.read() {
+            let MouseButtonEvent { button, state } = button_event;
+            if (*button, *state) == (MouseButton::Left, ElementState::Pressed) {
+                player_fire_event.send(GunFire);
+            }
+        }
+
     }
 
     #[rustfmt::skip]
@@ -373,38 +500,6 @@ mod doomclone_game {
         }
     }
 
-    fn spawn_imps(mut graphics: ResMut<Graphics>, mut commands: Commands) {
-        log::info!("Spawn mesh");
-
-        for pos_x in -2..3 {
-            let position = cgmath::vec3((pos_x as f32) * 3.0, 0.0, 5.0);
-            let rotation = Quat::one();
-
-            let path_to_obj = std::env::current_dir()
-                .unwrap()
-                .join("assets")
-                .join("meshes")
-                .join("Imphat.obj");
-            let path_to_texture = std::env::current_dir()
-                .unwrap()
-                .join("assets")
-                .join("meshes")
-                .join("imphat_diffuse.png");
-
-            let (mesh, main_texture, mesh_rendering_info, _) =
-                construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
-
-            let spawn = commands.spawn((
-                Position(position),
-                Rotation(rotation),
-                Imp,
-                mesh,
-                main_texture,
-                mesh_rendering_info,
-            ));
-        }
-    }
-
     fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         let path_to_obj = std::env::current_dir()
             .unwrap()
@@ -420,16 +515,18 @@ mod doomclone_game {
         let (mesh, main_texture, mesh_rendering_info, _) =
             construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
 
-        let position = cgmath::vec3(0.0, 2.0, 0.0);
+        let position = cgmath::vec3(0.0, 0.0, 0.0);
         let rotation = Quat::one();
 
         let spawn = commands.spawn((
+            Gun,
             Position(position),
             Rotation(rotation),
+            RelativePosition(position),
+            RelativeRotation(rotation),
             mesh,
             main_texture,
             mesh_rendering_info,
-            Gun,
         ));
     }
 
@@ -532,7 +629,7 @@ mod doomclone_game {
             });
 
         let camera = Camera {
-            field_of_view: Deg(45.0).into(),
+            field_of_view: Deg(90.0).into(),
             far_plane_distance: 100.0,
             near_plane_distance: 0.1,
             width: size.width,
@@ -556,6 +653,7 @@ mod doomclone_game {
                 projection,
                 uniform_buffers,
             },
+            Player,
         ));
     }
 }
@@ -617,7 +715,6 @@ mod saga_renderer {
     pub struct MeshUniformBufferObject {
         pub model: Matrix4<f32>,
     }
-
 
     fn camera_on_screen_resize(
         mut resize_event: EventReader<Resize>,
