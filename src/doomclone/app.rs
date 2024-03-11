@@ -341,7 +341,7 @@ mod doomclone_game {
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
         saga_audio::{AudioEmitter, AudioRuntimeManager},
-        saga_collision::MeshCollider,
+        saga_collision::{raycast, MeshCollider},
         saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent},
         saga_renderer::CameraUniformBufferObject,
         saga_window::Window,
@@ -357,6 +357,7 @@ mod doomclone_game {
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
         component::Component,
+        entity::Entity,
         event::{EventReader, EventWriter},
         query::{With, Without},
         system::{Commands, Local, Query, Res, ResMut},
@@ -383,6 +384,7 @@ mod doomclone_game {
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
                 .add_systems(bevy_app::Update, player_shooting)
+                .add_systems(bevy_app::Update, on_player_shot)
                 .add_systems(bevy_app::Update, player_reload)
                 .add_systems(bevy_app::Update, camera_movement)
                 .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
@@ -486,6 +488,45 @@ mod doomclone_game {
                 relative_rotation.0 = firing_rotation;
             }
         }
+    }
+
+    fn on_player_shot(
+        mut player_fire_event: EventReader<GunFire>,
+        players: Query<(Entity, &Position, &Rotation), With<Player>>,
+        movable_objects: Query<(Entity, &Position, &CircleCollider)>,
+        static_objects: Query<(Entity, &MeshCollider), Without<Movable>>,
+    ) {
+        player_fire_event.read().for_each(|_| {
+            for (player_entity, player_position, player_rotation) in players.iter() {
+                log::trace!(
+                    "Fire event detected {:?} forward {:?}",
+                    player_position.0.xz(),
+                    player_rotation.forward().xz(),
+                );
+
+                log::trace!("Movable objects {} Static objects {}", movable_objects.iter().len(), static_objects.iter().len());
+                let hit = unsafe {
+                    raycast(
+                        player_position.0.xz(),
+                        player_rotation.forward().xz(),
+                        &[player_entity],
+                        movable_objects.iter(),
+                        static_objects.iter(),
+                    )
+                };
+
+                if let Some(hit) = hit {
+                    let (t, entity) = hit;
+                    let collision_point = player_position.0 + t * player_rotation.forward();
+
+                    log::trace!(
+                        "Hiting entity {:?} at location {:?}",
+                        entity,
+                        collision_point
+                    );
+                }
+            }
+        });
     }
 
     fn player_shooting(
@@ -1527,7 +1568,14 @@ mod saga_collision {
                             mesh.vertices[i as usize].pos.xz()
                         })
                         .combinations(2)
-                        .map(|pair| LineSegment(pair[0], pair[1]))
+                        .map(|pair| {
+                            if pair[0] == pair[1] {
+                                None
+                            } else {
+                                Some(LineSegment(pair[0], pair[1]))
+                            }
+                        })
+                        .flatten()
                         .collect();
                     segments
                 })
@@ -1805,12 +1853,12 @@ mod saga_collision {
         ignores: &[Entity],
         dynamic_objects: DynamicObjectIterator,
         static_objects: StaticObjectIterator,
-    ) -> Option<(f32, Entity, Vector2<f32>)>
+    ) -> Option<(f32, Entity)>
     where
         DynamicObjectIterator: Iterator<Item = (Entity, &'a Position, &'a CircleCollider)>,
         StaticObjectIterator: Iterator<Item = (Entity, &'b MeshCollider)>,
     {
-        let collisions_with_dynamic_objects = dynamic_objects
+        let collisions_with_dynamic_objects : Vec<(f32, Entity)> = dynamic_objects
             .filter(|(entity, _, _)| !ignores.contains(entity))
             .map(|(entity, circle_position, circle_collider)| {
                 if let Some(t) = penetration_time_point_circle(
@@ -1825,11 +1873,13 @@ mod saga_collision {
                 } else {
                     None
                 }
-            });
-        let collisions_with_static_objects = static_objects
+            }).flatten().collect();
+        let collisions_with_static_objects : Vec<(f32, Entity)> = static_objects
             .filter(|(entity, _)| !ignores.contains(entity))
             .map(|(entity, mesh_collider)| {
                 mesh_collider.lines.iter().map(move |&segment| {
+                    log::trace!("Line segment: ({:?}, {:?})", segment.0, segment.1);
+
                     if let Some(t) = penetration_time_point_line(position, segment, direction) {
                         Some((t, entity))
                     } else {
@@ -1837,16 +1887,24 @@ mod saga_collision {
                     }
                 })
             })
-            .flatten();
+            .flatten().flatten().collect();
 
-        let collision_result =
-            collisions_with_static_objects.chain(collisions_with_dynamic_objects).flatten().min_by(sort_result);
 
-        if let Some(collision_result) = collision_result {
+        let collision_result = collisions_with_static_objects.iter()
+            .chain(collisions_with_dynamic_objects.iter())
+            .cloned()
+            .min_by(sort_result);
 
-        }
+        let number_of_static_collisions = collisions_with_static_objects.len();
+        let number_of_dynamic_collisions = collisions_with_dynamic_objects.len();
 
-        None
+        log::trace!(
+            "Collisions dynamic {} static {}",
+            number_of_dynamic_collisions,
+            number_of_static_collisions,
+        );
+
+        collision_result
     }
 
     pub enum PenetrationTestResult {
@@ -1877,6 +1935,7 @@ mod saga_collision {
         direction: Vector2<f32>,
     ) -> Option<f32> {
         if line_segment.is_point_on_line(point) {
+            log::trace!("Point on line");
             return if line_segment.is_point_in_band(point) {
                 Some(0.0)
             } else {
@@ -1887,11 +1946,15 @@ mod saga_collision {
         let normal_scaled = line_segment.get_normal_scaled(point); // should be none zero now
         let direction_projected_on_normal = get_projection(direction, normal_scaled);
 
-        let t = -(direction_projected_on_normal.magnitude2() / normal_scaled.magnitude2()).sqrt();
-
-        if t < 0.0 {
+        let is_line_behind_point = cgmath::dot(normal_scaled, direction) >= 0.0;
+        if is_line_behind_point {
+            log::trace!("Point behind line");
             return None;
         }
+
+        let t = (direction_projected_on_normal.magnitude2() / normal_scaled.magnitude2()).sqrt();
+
+        log::trace!("Collision at {}", t);
 
         let projected_point = point + direction * t;
 
