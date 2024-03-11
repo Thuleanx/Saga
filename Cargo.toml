@@ -19,6 +19,8 @@ bevy_app = "0.13.0"
 bevy_ecs = "0.13.0"
 bevy_time = "0.13.0"
 itertools = "0.12.1"
+kira = "0.8.7"
+mint = "0.5.9"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

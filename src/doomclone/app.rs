@@ -105,10 +105,7 @@ impl Camera {
         // where the forward direction is the direction that the camera
         // fulstrum captures, and the up direction is the downwards camera direction
         let intermediate_matrix: Mat4 = Mat4::new(
-            1.0, 0.0, 0.0, 0.0, 
-            0.0, -1.0, 0.0, 0.0, 
-            0.0, 0.0, -1.0, 0.0, 
-            0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         );
 
         let inverse_tan_half_fov: f32 = 1.0 / Angle::tan(self.field_of_view / 2.0);
@@ -160,7 +157,7 @@ impl Camera {
         let look: Vec3 = rotation.forward();
         let up: Vec3 = rotation.up();
         let right: Vec3 = rotation.right();
-            // look.cross(up);
+        // look.cross(up);
 
         // this is row major
         //  in view space, camera captures in the opposite direction of the look
@@ -222,7 +219,13 @@ fn construct_mesh_with_cpu_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_texture: &Path,
     cpu_mesh: CPUMesh,
-) -> Result<(Mesh, MainTexture, MeshRenderingInfo, MeshFragmentUniformObject, CPUMesh)> {
+) -> Result<(
+    Mesh,
+    MainTexture,
+    MeshRenderingInfo,
+    MeshFragmentUniformObject,
+    CPUMesh,
+)> {
     let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh).unwrap() };
 
     let texture = Image::load(&path_to_texture).unwrap();
@@ -313,7 +316,13 @@ fn construct_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_obj: &Path,
     path_to_texture: &Path,
-) -> Result<(Mesh, MainTexture, MeshRenderingInfo, MeshFragmentUniformObject, CPUMesh)> {
+) -> Result<(
+    Mesh,
+    MainTexture,
+    MeshRenderingInfo,
+    MeshFragmentUniformObject,
+    CPUMesh,
+)> {
     let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
 
     if cpu_mesh.len() == 0 {
@@ -331,8 +340,9 @@ mod doomclone_game {
 
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
+        saga_audio::{AudioEmitter, AudioRuntimeManager},
         saga_collision::MeshCollider,
-        saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
+        saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent},
         saga_renderer::CameraUniformBufferObject,
         saga_window::Window,
         MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed,
@@ -353,8 +363,10 @@ mod doomclone_game {
     };
     use bevy_time::Time;
     use cgmath::{
-        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3, Zero
+        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3,
+        Zero,
     };
+    use kira::sound::static_sound::StaticSoundSettings;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
 
     type Quat = cgmath::Quaternion<f32>;
@@ -367,13 +379,16 @@ mod doomclone_game {
                 .add_systems(bevy_app::Startup, spawn_map)
                 .add_systems(bevy_app::Startup, spawn_gun)
                 .add_systems(bevy_app::Startup, spawn_enemy)
+                .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
                 .add_systems(bevy_app::Update, player_shooting)
+                .add_systems(bevy_app::Update, player_reload)
                 .add_systems(bevy_app::Update, camera_movement)
                 .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
                 .add_systems(bevy_app::PostUpdate, animate_gun)
-                .add_event::<GunFire>();
+                .add_event::<GunFire>()
+                .add_event::<GunReload>();
         }
     }
 
@@ -392,6 +407,9 @@ mod doomclone_game {
     #[derive(bevy_ecs::event::Event)]
     struct GunFire;
 
+    #[derive(bevy_ecs::event::Event)]
+    struct GunReload;
+
     fn animate_gun(
         mut is_not_first_frame: Local<bool>,
         time: Res<Time>,
@@ -407,12 +425,18 @@ mod doomclone_game {
         player: Query<(&Position, &Rotation), (With<Player>, Without<Gun>)>,
     ) {
         const RESTING_POSITION: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
+        const RELOAD_POSITION: Vector3<f32> = cgmath::vec3(0.0, -2.334, 1.23);
 
         const POSITIONAL_SMOOTHING: f32 = 0.1;
         const ROTATIONAL_SMOOTHING: f32 = 0.1;
 
         let resting_rotation: Quat =
             Quaternion::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg(180.0));
+        let reload_rotation: Quat = Quaternion::from(Euler {
+            x: Deg(50.0),
+            y: Deg(180.0),
+            z: Deg(0.0),
+        });
 
         if is_not_first_frame.not() {
             *is_not_first_frame = true;
@@ -423,16 +447,20 @@ mod doomclone_game {
             }
         }
 
+        let desired_position = RESTING_POSITION;
+
+        let desired_rotation = resting_rotation;
+
         for (mut position, mut relative_position, mut rotation, mut relative_rotation) in
             gun.iter_mut()
         {
             let smoothing_power = 1.0 - POSITIONAL_SMOOTHING.powf(time.delta_seconds());
 
             relative_position.0 =
-                cgmath::VectorSpace::lerp(relative_position.0, RESTING_POSITION, smoothing_power);
+                cgmath::VectorSpace::lerp(relative_position.0, desired_position, smoothing_power);
 
             relative_rotation.0 =
-                cgmath::Quaternion::slerp(relative_rotation.0, resting_rotation, smoothing_power);
+                cgmath::Quaternion::slerp(relative_rotation.0, desired_rotation, smoothing_power);
 
             for (player_position, player_rotation) in player.iter() {
                 position.0 = player_rotation.0 * relative_position.0 + player_position.0;
@@ -468,6 +496,22 @@ mod doomclone_game {
             let MouseButtonEvent { button, state } = button_event;
             if (*button, *state) == (MouseButton::Left, ElementState::Pressed) {
                 player_fire_event.send(GunFire);
+            }
+        }
+    }
+
+    fn player_reload(
+        mut keyboard_events: EventReader<KeyboardEvent>,
+        mut player_reload_event: EventWriter<GunReload>,
+    ) {
+        for keyboard_event in keyboard_events.read() {
+            let KeyboardEvent {
+                scancode,
+                state,
+                keycode,
+            } = keyboard_event;
+            if (*keycode, *state) == (Key::R, ElementState::Pressed) {
+                player_reload_event.send(GunReload);
             }
         }
     }
@@ -616,11 +660,28 @@ mod doomclone_game {
             Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
             CircleCollider { radius: 1.0 },
             LookAtPlayer,
+            Movable,
             mesh,
             main_texture,
             mesh_rendering_info,
             mesh_fragment_info,
         ));
+    }
+
+    fn spawn_music(mut audio_manager: ResMut<AudioRuntimeManager>, mut commands: Commands) {
+        let path_to_music = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("audio")
+            .join("music")
+            .join("ASharpMinor0.wav");
+
+        let sound_setting = StaticSoundSettings::default().loop_region(0.0..);
+
+        let audio_emitter =
+            AudioEmitter::new(audio_manager.as_mut(), path_to_music, true, sound_setting).unwrap();
+
+        let spawn = commands.spawn(audio_emitter);
     }
 
     fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
@@ -753,6 +814,10 @@ mod doomclone_game {
     }
 }
 
+mod saga_combat {
+    pub struct Health {}
+}
+
 mod saga_renderer {
     use anyhow::Result;
     use bevy_app::Plugin as BevyPlugin;
@@ -785,8 +850,14 @@ mod saga_renderer {
                     build_command_buffer.pipe(log_error_result),
                 )
                 .add_systems(bevy_app::Update, camera_on_screen_resize)
-                .add_systems(bevy_app::PostUpdate, update_mesh_fragment_information_on_change)
-                .add_systems(bevy_app::PostStartup, update_mesh_fragment_information_on_post_startup)
+                .add_systems(
+                    bevy_app::PostUpdate,
+                    update_mesh_fragment_information_on_change,
+                )
+                .add_systems(
+                    bevy_app::PostStartup,
+                    update_mesh_fragment_information_on_post_startup,
+                )
                 .add_systems(bevy_app::PostStartup, finalize_descriptors)
                 .add_systems(bevy_app::PostUpdate, update_camera_view);
         }
@@ -882,7 +953,9 @@ mod saga_renderer {
         mesh_rendering_info: &MeshRenderingInfo,
         mesh_fragment_info: &MeshFragmentUniformObject,
     ) -> Result<()> {
-        let number_of_buffers_to_update = mesh_rendering_info.fragment_uniform_buffers.get_number_of_buffers();
+        let number_of_buffers_to_update = mesh_rendering_info
+            .fragment_uniform_buffers
+            .get_number_of_buffers();
         for index in 0..number_of_buffers_to_update {
             unsafe {
                 graphics.update_uniform_buffer_series(
@@ -897,19 +970,24 @@ mod saga_renderer {
 
     fn update_mesh_fragment_information_on_change(
         graphics: ResMut<Graphics>,
-        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject), Changed<MeshFragmentUniformObject>>
+        mesh_query: Query<
+            (&MeshRenderingInfo, &MeshFragmentUniformObject),
+            Changed<MeshFragmentUniformObject>,
+        >,
     ) {
         for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
-            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info).unwrap();
+            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info)
+                .unwrap();
         }
     }
 
     fn update_mesh_fragment_information_on_post_startup(
         graphics: ResMut<Graphics>,
-        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject)>
+        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject)>,
     ) {
         for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
-            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info).unwrap();
+            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info)
+                .unwrap();
         }
     }
 
@@ -929,7 +1007,8 @@ mod saga_renderer {
 
             let ubo = MeshVertexUniformObject { model };
 
-            let number_of_buffers_to_update = rendering_info.vertex_uniform_buffers.get_buffers().len();
+            let number_of_buffers_to_update =
+                rendering_info.vertex_uniform_buffers.get_buffers().len();
             for index in 0..number_of_buffers_to_update {
                 unsafe {
                     graphics.update_uniform_buffer_series(
@@ -1401,6 +1480,7 @@ mod saga_collision {
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
         component::Component,
+        entity::Entity,
         query::{With, Without},
         system::{Query, Res},
     };
@@ -1493,6 +1573,20 @@ mod saga_collision {
         fn direction(&self) -> Vector2<f32> {
             self.1 - self.0
         }
+
+        fn is_point_on_segment(&self, point: Vector2<f32>) -> bool {
+            self.is_point_on_line(point) && self.is_point_in_band(point)
+        }
+
+        fn is_point_in_band(&self, point: Vector2<f32>) -> bool {
+            cgmath::dot(point - self.0, point - self.1) <= 0.0
+        }
+
+        fn is_point_on_line(&self, point: Vector2<f32>) -> bool {
+            let a = point - self.0;
+            let b = self.direction();
+            b.magnitude2() * a == cgmath::dot(a, b) * b
+        }
     }
 
     /// Get the part of a that is perpendicular to b.
@@ -1536,16 +1630,21 @@ mod saga_collision {
 
     fn collision_system(
         time: Res<Time>,
-        movables: Query<(&mut Position, &mut Velocity, &CircleCollider), With<Movable>>,
+        movables: Query<(&mut Position, Option<&mut Velocity>, &CircleCollider), With<Movable>>,
         static_objects: Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
     ) {
         const MAX_TRANSLATIONS: usize = 5;
         const MINIMUM_TRANSLATION_DISTANCE: f32 = 0.0001;
 
         unsafe {
-            for (index, (mut position, mut velocity, circle_collider)) in
+            for (index, (mut position, velocity, circle_collider)) in
                 movables.iter_unsafe().enumerate()
             {
+                if velocity.is_none() {
+                    continue;
+                }
+
+                let mut velocity = velocity.unwrap();
                 if velocity.0.is_zero() {
                     continue;
                 }
@@ -1595,17 +1694,17 @@ mod saga_collision {
         }
     }
 
+    fn sort_result<T>(a: &(f32, T), b: &(f32, T)) -> std::cmp::Ordering {
+        sort_f32(&a.0, &b.0)
+    }
+
     unsafe fn get_first_collision(
         movable_index: usize,
         circle_bound: Circle,
         direction: Vector2<f32>,
-        movables: &Query<(&mut Position, &mut Velocity, &CircleCollider), With<Movable>>,
+        movables: &Query<(&mut Position, Option<&mut Velocity>, &CircleCollider), With<Movable>>,
         static_objects: &Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
     ) -> (f32, Collision) {
-        fn sort_result<T>(a: &(f32, T), b: &(f32, T)) -> std::cmp::Ordering {
-            sort_f32(&a.0, &b.0)
-        }
-
         let collisions_with_dynamic_objects = movables.iter_unsafe().enumerate().map(
             |(index_dynamic, (position, _, circle_collider))| {
                 if movable_index == index_dynamic {
@@ -1700,6 +1799,56 @@ mod saga_collision {
         collision_result.unwrap()
     }
 
+    pub unsafe fn raycast<'a, 'b, DynamicObjectIterator, StaticObjectIterator>(
+        position: Vector2<f32>,
+        direction: Vector2<f32>,
+        ignores: &[Entity],
+        dynamic_objects: DynamicObjectIterator,
+        static_objects: StaticObjectIterator,
+    ) -> Option<(f32, Entity, Vector2<f32>)>
+    where
+        DynamicObjectIterator: Iterator<Item = (Entity, &'a Position, &'a CircleCollider)>,
+        StaticObjectIterator: Iterator<Item = (Entity, &'b MeshCollider)>,
+    {
+        let collisions_with_dynamic_objects = dynamic_objects
+            .filter(|(entity, _, _)| !ignores.contains(entity))
+            .map(|(entity, circle_position, circle_collider)| {
+                if let Some(t) = penetration_time_point_circle(
+                    position,
+                    Circle {
+                        position: circle_position.0.xz(),
+                        radius: circle_collider.radius,
+                    },
+                    direction,
+                ) {
+                    Some((t, entity))
+                } else {
+                    None
+                }
+            });
+        let collisions_with_static_objects = static_objects
+            .filter(|(entity, _)| !ignores.contains(entity))
+            .map(|(entity, mesh_collider)| {
+                mesh_collider.lines.iter().map(move |&segment| {
+                    if let Some(t) = penetration_time_point_line(position, segment, direction) {
+                        Some((t, entity))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .flatten();
+
+        let collision_result =
+            collisions_with_static_objects.chain(collisions_with_dynamic_objects).flatten().min_by(sort_result);
+
+        if let Some(collision_result) = collision_result {
+
+        }
+
+        None
+    }
+
     pub enum PenetrationTestResult {
         WillPenetrate { earliest_time: f32 },
         AlreadyPenetrating { exit_time: f32 },
@@ -1720,6 +1869,37 @@ mod saga_collision {
             stationary_circle.position,
             direction,
         )
+    }
+
+    fn penetration_time_point_line(
+        point: Vector2<f32>,
+        line_segment: LineSegment,
+        direction: Vector2<f32>,
+    ) -> Option<f32> {
+        if line_segment.is_point_on_line(point) {
+            return if line_segment.is_point_in_band(point) {
+                Some(0.0)
+            } else {
+                None
+            };
+        }
+
+        let normal_scaled = line_segment.get_normal_scaled(point); // should be none zero now
+        let direction_projected_on_normal = get_projection(direction, normal_scaled);
+
+        let t = -(direction_projected_on_normal.magnitude2() / normal_scaled.magnitude2()).sqrt();
+
+        if t < 0.0 {
+            return None;
+        }
+
+        let projected_point = point + direction * t;
+
+        if line_segment.is_point_in_band(projected_point) {
+            Some(t)
+        } else {
+            None
+        }
     }
 
     fn penetration_time_circle_line(
@@ -1814,6 +1994,14 @@ mod saga_collision {
         None
     }
 
+    fn penetration_time_point_circle(
+        point: Vector2<f32>,
+        circle: Circle,
+        direction: Vector2<f32>,
+    ) -> Option<f32> {
+        penetration_time_circle_point(circle, point, -direction)
+    }
+
     fn penetration_time_circle_point(
         circle: Circle,
         point: Vector2<f32>,
@@ -1903,12 +2091,160 @@ mod saga_utils {
     }
 }
 
+mod saga_audio {
+    use anyhow::Result;
+    use bevy_app::Plugin;
+    use bevy_ecs::{
+        component::Component,
+        system::{Query, ResMut, Resource},
+    };
+    use cgmath::{One, Quaternion, Vector3, Zero};
+    use kira::{
+        manager::{backend::DefaultBackend, AudioManager, AudioManagerSettings},
+        sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings},
+        spatial::{
+            listener::{ListenerHandle, ListenerSettings},
+            scene::{SpatialSceneHandle, SpatialSceneSettings},
+        },
+        tween::Tween,
+    };
+    use std::{path::Path, time::Duration};
+
+    #[derive(Resource)]
+    pub struct AudioRuntimeManager {
+        audio_manager: AudioManager,
+        spatial_space: SpatialSceneHandle,
+    }
+
+    pub struct AudioPlugin;
+    impl Plugin for AudioPlugin {
+        fn build(&self, app: &mut bevy_app::App) {
+            init_resources(app);
+            app.add_systems(bevy_app::PostStartup, play_sound_on_load);
+        }
+    }
+
+    #[derive(Component)]
+    pub struct AudioEmitter {
+        sound_data: StaticSoundData,
+        sound_handler: Option<StaticSoundHandle>,
+        should_play_on_load: bool,
+    }
+
+    impl AudioEmitter {
+        pub fn new(
+            audio_runtime_manager: &AudioRuntimeManager,
+            path_to_sound: impl AsRef<Path>,
+            should_play_on_load: bool,
+            sound_settings: StaticSoundSettings,
+        ) -> Result<Self> {
+            let sound_data = StaticSoundData::from_file(path_to_sound, sound_settings)?;
+
+            Ok(AudioEmitter {
+                sound_data,
+                sound_handler: None,
+                should_play_on_load,
+            })
+        }
+
+        pub fn play(&mut self, audio_runtime_manager: &mut AudioRuntimeManager) -> Result<()> {
+            if let Some(_) = self.sound_handler {
+            } else {
+                let event_instance = audio_runtime_manager
+                    .audio_manager
+                    .play(self.sound_data.clone())?;
+
+                self.sound_handler = Some(event_instance);
+            }
+            Ok(())
+        }
+
+        pub fn stop(&mut self, audio_runtime_manager: &mut AudioRuntimeManager) -> Result<()> {
+            if let Some(sound_handler) = &mut self.sound_handler {
+                sound_handler.stop(Tween {
+                    start_time: kira::StartTime::Immediate,
+                    duration: Duration::ZERO,
+                    easing: kira::tween::Easing::Linear,
+                })?;
+            }
+            self.sound_handler = None;
+            Ok(())
+        }
+    }
+
+    #[derive(Component)]
+    pub struct AudioListener {
+        listener: ListenerHandle,
+    }
+
+    impl AudioListener {
+        pub fn new(audio_runtime_manager: &mut AudioRuntimeManager) -> Self {
+            let listener = audio_runtime_manager
+                .spatial_space
+                .add_listener(
+                    convert_vector(Vector3::zero()),
+                    convert_rotation(Quaternion::one()),
+                    ListenerSettings::new(),
+                )
+                .unwrap();
+
+            AudioListener { listener }
+        }
+    }
+
+    fn convert_vector(vector: Vector3<f32>) -> mint::Vector3<f32> {
+        mint::Vector3 {
+            x: vector.x,
+            y: vector.y,
+            z: vector.z,
+        }
+    }
+
+    fn convert_rotation(quaternion: Quaternion<f32>) -> mint::Quaternion<f32> {
+        mint::Quaternion {
+            v: convert_vector(quaternion.v),
+            s: quaternion.s,
+        }
+    }
+
+    fn init_resources(app: &mut bevy_app::App) {
+        let mut audio_manager =
+            AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
+
+        let mut spatial_space_settings = SpatialSceneSettings::default();
+        spatial_space_settings.listener_capacity = 1;
+        spatial_space_settings.emitter_capacity = 128;
+
+        let audio_space = audio_manager
+            .add_spatial_scene(spatial_space_settings)
+            .unwrap();
+
+        app.insert_resource(AudioRuntimeManager {
+            audio_manager,
+            spatial_space: audio_space,
+        });
+    }
+
+    fn play_sound_on_load(
+        mut audio_manager: ResMut<AudioRuntimeManager>,
+        mut all_sound_emitters: Query<&mut AudioEmitter>,
+    ) {
+        all_sound_emitters
+            .iter_mut()
+            .filter(|sound_emitter| sound_emitter.should_play_on_load)
+            .for_each(|mut sound_emitter| {
+                sound_emitter.play(audio_manager.as_mut()).unwrap();
+            });
+    }
+}
+
 pub fn construct_app() -> App {
     let mut app = App::new();
     app.add_plugins((
         saga_window::WindowPlugin,
         saga_renderer::Plugin,
         saga_collision::CollisionPlugin,
+        saga_audio::AudioPlugin,
         bevy_time::TimePlugin,
         doomclone_game::GamePlugin,
     ));
