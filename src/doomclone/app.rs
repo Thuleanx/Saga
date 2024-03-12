@@ -339,13 +339,12 @@ mod doomclone_game {
     use std::ops::Not;
 
     use super::{
-        construct_mesh, construct_mesh_with_cpu_mesh, saga_audio::{AudioEmitter, AudioRuntimeManager}, saga_collision::{raycast, MeshCollider}, saga_combat::Health, saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed
+        construct_mesh, construct_mesh_with_cpu_mesh, saga_audio::{AudioEmitter, AudioRuntimeManager}, saga_collision::{raycast, MeshCollider}, saga_combat::{DamageEvent, Health}, saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed
     };
     use crate::{
         core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
         doomclone::app::{
-            saga_collision::{CircleCollider, Movable, Velocity},
-            Camera, CameraRenderingInfo,
+            saga_collision::{CircleCollider, Movable, Velocity}, saga_combat, Camera, CameraRenderingInfo
         },
     };
     use bevy_app::{App, Plugin};
@@ -488,45 +487,49 @@ mod doomclone_game {
 
     fn on_player_shot(
         mut player_fire_event: EventReader<GunFire>,
-        players: Query<(Entity, &Position, &Rotation), With<Player>>,
+        mut damage_event: EventWriter<DamageEvent>,
+        player: Query<(Entity, &Position, &Rotation), With<Player>>,
         movable_objects: Query<(Entity, &Position, &CircleCollider)>,
         static_objects: Query<(Entity, &MeshCollider), Without<Movable>>,
     ) {
-        player_fire_event.read().for_each(|_| {
-            for (player_entity, player_position, player_rotation) in players.iter() {
-                log::trace!(
-                    "Fire event detected {:?} forward {:?}",
-                    player_position.0.xz(),
-                    player_rotation.forward().xz(),
-                );
+        let is_player_not_firing = player_fire_event.read().len() == 0;
+        if is_player_not_firing {
+            return;
+        }
+        let (player_entity, player_position, player_rotation) = player.single();
+        log::trace!(
+            "Fire event detected {:?} forward {:?}",
+            player_position.0.xz(),
+            player_rotation.forward().xz(),
+        );
 
-                log::trace!(
-                    "Movable objects {} Static objects {}",
-                    movable_objects.iter().len(),
-                    static_objects.iter().len()
-                );
-                let hit = unsafe {
-                    raycast(
-                        player_position.0.xz(),
-                        player_rotation.forward().xz(),
-                        &[player_entity],
-                        movable_objects.iter(),
-                        static_objects.iter(),
-                    )
-                };
+        log::trace!(
+            "Movable objects {} Static objects {}",
+            movable_objects.iter().len(),
+            static_objects.iter().len()
+        );
+        let hit = unsafe {
+            raycast(
+                player_position.0.xz(),
+                player_rotation.forward().xz(),
+                &[player_entity],
+                movable_objects.iter(),
+                static_objects.iter(),
+            )
+        };
 
-                if let Some(hit) = hit {
-                    let (t, entity) = hit;
-                    let collision_point = player_position.0 + t * player_rotation.forward();
+        if let Some(hit) = hit {
+            let (t, target_entity) = hit;
+            let collision_point = player_position.0 + t * player_rotation.forward();
 
-                    log::trace!(
-                        "Hiting entity {:?} at location {:?}",
-                        entity,
-                        collision_point
-                    );
-                }
-            }
-        });
+            log::trace!(
+                "Hiting entity {:?} at location {:?}",
+                target_entity,
+                collision_point
+            );
+
+            saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity)
+        }
     }
 
     fn player_shooting(
@@ -945,6 +948,8 @@ mod saga_combat {
                 Err(QueryEntityError::NoSuchEntity(_)) => continue,
                 Err(QueryEntityError::AliasedMutability(_)) => continue,
             };
+
+            log::trace!("Enemy hit");
 
             // Decrement health
             health.current_health = if health.current_health > damage_event.damage {
@@ -1665,6 +1670,9 @@ mod saga_collision {
                             // transform to flattened points
                             mesh.vertices[i as usize].pos.xz()
                         })
+                        .map(|v| (v.x.to_bits(), v.y.to_bits())) // map to bits to perform unique
+                        .unique()
+                        .map(|(x,y)| cgmath::vec2(f32::from_bits(x), f32::from_bits(y)))
                         .combinations(2)
                         .map(|pair| {
                             if pair[0] == pair[1] {
@@ -1978,8 +1986,6 @@ mod saga_collision {
             .filter(|(entity, _)| !ignores.contains(entity))
             .map(|(entity, mesh_collider)| {
                 mesh_collider.lines.iter().map(move |&segment| {
-                    log::trace!("Line segment: ({:?}, {:?})", segment.0, segment.1);
-
                     if let Some(t) = penetration_time_point_line(position, segment, direction) {
                         Some((t, entity))
                     } else {
@@ -1996,15 +2002,6 @@ mod saga_collision {
             .chain(collisions_with_dynamic_objects.iter())
             .cloned()
             .min_by(sort_result);
-
-        let number_of_static_collisions = collisions_with_static_objects.len();
-        let number_of_dynamic_collisions = collisions_with_dynamic_objects.len();
-
-        log::trace!(
-            "Collisions dynamic {} static {}",
-            number_of_dynamic_collisions,
-            number_of_static_collisions,
-        );
 
         collision_result
     }
@@ -2047,6 +2044,7 @@ mod saga_collision {
 
         let normal_scaled = line_segment.get_normal_scaled(point); // should be none zero now
         let direction_projected_on_normal = get_projection(direction, normal_scaled);
+        let to_point_projected_on_normal = get_projection(point - line_segment.0, normal_scaled);
 
         let is_line_behind_point = cgmath::dot(normal_scaled, direction) >= 0.0;
         if is_line_behind_point {
@@ -2054,15 +2052,14 @@ mod saga_collision {
             return None;
         }
 
-        let t = (direction_projected_on_normal.magnitude2() / normal_scaled.magnitude2()).sqrt();
-
-        log::trace!("Collision at {}", t);
-
+        let t = (to_point_projected_on_normal.magnitude2() / direction_projected_on_normal.magnitude2()).sqrt();
         let projected_point = point + direction * t;
 
         if line_segment.is_point_in_band(projected_point) {
+            log::trace!("Collision at {}", t);
             Some(t)
         } else {
+            log::trace!("Point hit line but not segment");
             None
         }
     }
