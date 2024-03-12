@@ -339,13 +339,7 @@ mod doomclone_game {
     use std::ops::Not;
 
     use super::{
-        construct_mesh, construct_mesh_with_cpu_mesh,
-        saga_audio::{AudioEmitter, AudioRuntimeManager},
-        saga_collision::{raycast, MeshCollider},
-        saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent},
-        saga_renderer::CameraUniformBufferObject,
-        saga_window::Window,
-        MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed,
+        construct_mesh, construct_mesh_with_cpu_mesh, saga_audio::{AudioEmitter, AudioRuntimeManager}, saga_collision::{raycast, MeshCollider}, saga_combat::Health, saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed
     };
     use crate::{
         core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
@@ -377,17 +371,19 @@ mod doomclone_game {
     impl Plugin for GamePlugin {
         fn build(&self, app: &mut App) {
             app.add_systems(bevy_app::Startup, spawn_camera)
+                .add_systems(bevy_app::Startup, spawn_player)
                 .add_systems(bevy_app::Startup, spawn_map)
                 .add_systems(bevy_app::Startup, spawn_gun)
                 .add_systems(bevy_app::Startup, spawn_enemy)
                 .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
+                .add_systems(bevy_app::Update, system_animate_camera)
                 .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, on_player_shot)
                 .add_systems(bevy_app::Update, player_reload)
-                .add_systems(bevy_app::Update, camera_movement)
-                .add_systems(bevy_app::Update, camera_rotate_with_mouse_x)
+                .add_systems(bevy_app::Update, player_movement)
+                .add_systems(bevy_app::Update, system_player_rotate_with_mouse_x)
                 .add_systems(bevy_app::PostUpdate, animate_gun)
                 .add_event::<GunFire>()
                 .add_event::<GunReload>();
@@ -504,7 +500,11 @@ mod doomclone_game {
                     player_rotation.forward().xz(),
                 );
 
-                log::trace!("Movable objects {} Static objects {}", movable_objects.iter().len(), static_objects.iter().len());
+                log::trace!(
+                    "Movable objects {} Static objects {}",
+                    movable_objects.iter().len(),
+                    static_objects.iter().len()
+                );
                 let hit = unsafe {
                     raycast(
                         player_position.0.xz(),
@@ -580,9 +580,9 @@ mod doomclone_game {
     }
 
     #[rustfmt::skip]
-    fn camera_movement(
+    fn player_movement(
         button_input: Res<ButtonInput>,
-        mut cameras: Query<(&Position, &Rotation, &mut Velocity, &Camera, &MovementSpeed)>
+        mut players: Query<(&Position, &Rotation, &mut Velocity, &MovementSpeed), With<Player>>
     ) {
         let movement_w = if button_input.is_key_down(Key::W) {1} else {0};
         let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
@@ -597,7 +597,7 @@ mod doomclone_game {
             movement = movement.normalize();
         }
 
-        for (position, rotation, mut velocity, camera, movement_speed) in cameras.iter_mut() {
+        for (position, rotation, mut velocity, movement_speed) in players.iter_mut() {
             let mut forward = rotation.forward();
             forward.y = 0.0;
             if !forward.is_zero() {
@@ -616,12 +616,12 @@ mod doomclone_game {
         }
     }
 
-    fn camera_rotate_with_mouse_x(
+    fn system_player_rotate_with_mouse_x(
         mut mouse_change_events: EventReader<MouseChangeEvent>,
-        mut cameras: Query<(&Position, &mut Rotation, &TurnSpeed)>,
+        mut players: Query<(&Position, &mut Rotation, &TurnSpeed), With<Player>>,
     ) {
         for mouse_change_event in mouse_change_events.read() {
-            for (position, mut rotation, turn_speed) in cameras.iter_mut() {
+            for (position, mut rotation, turn_speed) in players.iter_mut() {
                 let turn_amount = turn_speed.0.x * -mouse_change_event.delta.x;
                 let turn_amount_f32 = Rad(turn_amount.0 as f32);
                 let turn_axis = cgmath::vec3(0.0, 1.0, 0.0);
@@ -634,12 +634,12 @@ mod doomclone_game {
         }
     }
 
-    fn camera_rotate_with_mouse_y(
+    fn system_player_rotate_with_mouse_y(
         mut mouse_change_events: EventReader<MouseChangeEvent>,
-        mut cameras: Query<(&Position, &mut Rotation, &TurnSpeed)>,
+        mut players: Query<(&Position, &mut Rotation, &TurnSpeed), With<Player>>,
     ) {
         for mouse_change_event in mouse_change_events.read() {
-            for (position, mut rotation, turn_speed) in cameras.iter_mut() {
+            for (position, mut rotation, turn_speed) in players.iter_mut() {
                 let turn_amount = turn_speed.0.y * mouse_change_event.delta.y;
                 let turn_amount_f32 = Rad(turn_amount.0 as f32);
 
@@ -651,6 +651,17 @@ mod doomclone_game {
             }
         }
     }
+
+    fn system_animate_camera(
+        mut camera : Query<(&mut Position, &mut Rotation), With<Camera>>,
+        player: Query<(&Position, &Rotation), (With<Player>, Without<Camera>)>
+    ) {
+        let (player_position, player_rotation) = player.single();
+        let (mut camera_position, mut camera_rotation) = camera.single_mut();
+        camera_position.0 = player_position.0;
+        camera_rotation.0 = player_rotation.0;
+    }
+
 
     fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         let path_to_obj = std::env::current_dir()
@@ -702,6 +713,7 @@ mod doomclone_game {
             CircleCollider { radius: 1.0 },
             LookAtPlayer,
             Movable,
+            Health::new(10),
             mesh,
             main_texture,
             mesh_rendering_info,
@@ -790,16 +802,31 @@ mod doomclone_game {
         ));
     }
 
-    fn spawn_camera(window: Res<Window>, mut graphics: ResMut<Graphics>, mut commands: Commands) {
-        log::info!("Spawn camera");
+    fn spawn_player(mut commands: Commands) {
         let position = Position(cgmath::vec3(0.0, 2.0, -4.0));
         let rotation = Rotation(Quat::one());
-        let movement_speed = MovementSpeed(8.0);
         let turn_speed = TurnSpeed(cgmath::vec2(
             cgmath::Rad(1.0 / 100.0),
             cgmath::Rad(1.0 / 100.0),
         ));
 
+        let spawn = commands.spawn((
+            Player,
+            MovementSpeed(8.0),
+            CircleCollider { radius: 1.0 },
+            Health::new(10),
+            position,
+            rotation,
+            turn_speed,
+            Movable,
+            Velocity(Vector2::zero()),
+        ));
+    }
+
+    fn spawn_camera(window: Res<Window>, mut graphics: ResMut<Graphics>, mut commands: Commands) {
+        log::info!("Spawn camera");
+        let position = Position(cgmath::vec3(0.0, 2.0, -4.0));
+        let rotation = Rotation(Quat::one());
         let size = window.window.inner_size();
 
         let uniform_buffers = unsafe {
@@ -839,24 +866,95 @@ mod doomclone_game {
         let spawn = commands.spawn((
             position,
             rotation,
-            movement_speed,
-            turn_speed,
             camera,
-            CircleCollider { radius: 1.0 },
-            Velocity(Vector2::zero()),
-            Movable,
             CameraRenderingInfo {
                 view,
                 projection,
                 uniform_buffers,
             },
-            Player,
         ));
     }
 }
 
 mod saga_combat {
-    pub struct Health {}
+    use bevy_app::Plugin;
+    use bevy_ecs::{
+        component::Component,
+        entity::Entity,
+        event::{Event, EventReader, EventWriter},
+        query::QueryEntityError,
+        system::Query,
+    };
+
+    pub struct CombatPlugin;
+
+    impl Plugin for CombatPlugin {
+        fn build(&self, app: &mut bevy_app::App) {
+            app.add_event::<DamageEvent>()
+                .add_event::<DeathEvent>()
+                .add_systems(bevy_app::Update, system_register_damage);
+        }
+    }
+
+    #[derive(Component)]
+    pub struct Health {
+        current_health: u32,
+        max_health: u32,
+    }
+
+    impl Health {
+        pub fn new(max_health: u32) -> Self {
+            Self {
+                current_health: max_health,
+                max_health,
+            }
+        }
+    }
+
+    #[derive(Event)]
+    pub struct DamageEvent {
+        damage: u32,
+        target: Entity,
+        source: Entity,
+    }
+
+    #[derive(Event)]
+    pub struct DeathEvent {
+        target: Entity,
+    }
+
+    pub fn deal_damage(damage_event_writer: &mut EventWriter<DamageEvent>, damage: u32, target: Entity, source: Entity) {
+        damage_event_writer.send(DamageEvent {
+            damage,
+            target,
+            source
+        });
+    }
+
+    fn system_register_damage(
+        mut damage_events: EventReader<DamageEvent>,
+        mut death_event_invoker: EventWriter<DeathEvent>,
+        mut entities_with_health: Query<&mut Health>,
+    ) {
+        for damage_event in damage_events.read() {
+            let health_query = entities_with_health.get_mut(damage_event.target);
+
+            let mut health = match health_query {
+                Ok(health) => health,
+                Err(QueryEntityError::QueryDoesNotMatch(_)) => continue,
+                Err(QueryEntityError::NoSuchEntity(_)) => continue,
+                Err(QueryEntityError::AliasedMutability(_)) => continue,
+            };
+
+            // Decrement health
+            health.current_health = if health.current_health > damage_event.damage {
+                health.current_health - damage_event.damage
+            } else {
+                death_event_invoker.send(DeathEvent {target: damage_event.target});
+                0
+            };
+        }
+    }
 }
 
 mod saga_renderer {
@@ -1858,7 +1956,7 @@ mod saga_collision {
         DynamicObjectIterator: Iterator<Item = (Entity, &'a Position, &'a CircleCollider)>,
         StaticObjectIterator: Iterator<Item = (Entity, &'b MeshCollider)>,
     {
-        let collisions_with_dynamic_objects : Vec<(f32, Entity)> = dynamic_objects
+        let collisions_with_dynamic_objects: Vec<(f32, Entity)> = dynamic_objects
             .filter(|(entity, _, _)| !ignores.contains(entity))
             .map(|(entity, circle_position, circle_collider)| {
                 if let Some(t) = penetration_time_point_circle(
@@ -1873,8 +1971,10 @@ mod saga_collision {
                 } else {
                     None
                 }
-            }).flatten().collect();
-        let collisions_with_static_objects : Vec<(f32, Entity)> = static_objects
+            })
+            .flatten()
+            .collect();
+        let collisions_with_static_objects: Vec<(f32, Entity)> = static_objects
             .filter(|(entity, _)| !ignores.contains(entity))
             .map(|(entity, mesh_collider)| {
                 mesh_collider.lines.iter().map(move |&segment| {
@@ -1887,10 +1987,12 @@ mod saga_collision {
                     }
                 })
             })
-            .flatten().flatten().collect();
+            .flatten()
+            .flatten()
+            .collect();
 
-
-        let collision_result = collisions_with_static_objects.iter()
+        let collision_result = collisions_with_static_objects
+            .iter()
             .chain(collisions_with_dynamic_objects.iter())
             .cloned()
             .min_by(sort_result);
@@ -2308,6 +2410,7 @@ pub fn construct_app() -> App {
         saga_renderer::Plugin,
         saga_collision::CollisionPlugin,
         saga_audio::AudioPlugin,
+        saga_combat::CombatPlugin,
         bevy_time::TimePlugin,
         doomclone_game::GamePlugin,
     ));
