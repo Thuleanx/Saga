@@ -743,6 +743,13 @@ impl Graphics {
     ) {
         uniform_buffers.bind_to_descriptor_sets::<T>(&self.device, descriptor_sets, binding)
     }
+
+    pub unsafe fn reset_command_buffers(&self) -> Result<()> {
+        self.command_buffers.iter().for_each(|command_buffer: &vk::CommandBuffer| {
+            command_buffers::reset_command_buffer(&self.device, command_buffer.clone()).unwrap()
+        });
+        Ok(())
+    }
 }
 
 pub mod graphics_utility {

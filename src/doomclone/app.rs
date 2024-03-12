@@ -336,24 +336,29 @@ fn construct_mesh(
 }
 
 mod doomclone_game {
-    use std::ops::Not;
+    use std::{collections::HashSet, ops::Not};
 
     use super::{
-        construct_mesh, construct_mesh_with_cpu_mesh, saga_audio::{AudioEmitter, AudioRuntimeManager}, saga_collision::{raycast, MeshCollider}, saga_combat::{DamageEvent, Health}, saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent}, saga_renderer::CameraUniformBufferObject, saga_window::Window, MovementSpeed, Position, RelativePosition, RelativeRotation, Rotation, Scale, TurnSpeed
+        construct_mesh, construct_mesh_with_cpu_mesh,
+        saga_audio::{AudioEmitter, AudioRuntimeManager},
+        saga_collision::{raycast, MeshCollider},
+        saga_combat::{DamageEvent, DeathEvent, Health},
+        saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent},
+        saga_renderer::{self, CameraUniformBufferObject},
+        saga_window::Window,
+        MainTexture, Mesh, MeshRenderingInfo, MovementSpeed, Position, RelativePosition,
+        RelativeRotation, Rotation, Scale, TurnSpeed,
     };
     use crate::{
         core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
         doomclone::app::{
-            saga_collision::{CircleCollider, Movable, Velocity}, saga_combat, Camera, CameraRenderingInfo
+            saga_collision::{CircleCollider, Movable, Velocity},
+            saga_combat, Camera, CameraRenderingInfo,
         },
     };
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
-        component::Component,
-        entity::Entity,
-        event::{EventReader, EventWriter},
-        query::{With, Without},
-        system::{Commands, Local, Query, Res, ResMut},
+        component::Component, entity::Entity, event::{EventReader, EventWriter}, query::{With, Without}, schedule::{common_conditions::on_event, IntoSystemConfigs}, system::{Commands, Local, Query, Res, ResMut}
     };
     use bevy_time::Time;
     use cgmath::{
@@ -380,6 +385,7 @@ mod doomclone_game {
                 .add_systems(bevy_app::Update, system_animate_camera)
                 .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, on_player_shot)
+                .add_systems(bevy_app::Update, on_entity_death.run_if(on_event::<DeathEvent>()))
                 .add_systems(bevy_app::Update, player_reload)
                 .add_systems(bevy_app::Update, player_movement)
                 .add_systems(bevy_app::Update, system_player_rotate_with_mouse_x)
@@ -492,44 +498,71 @@ mod doomclone_game {
         movable_objects: Query<(Entity, &Position, &CircleCollider)>,
         static_objects: Query<(Entity, &MeshCollider), Without<Movable>>,
     ) {
-        let is_player_not_firing = player_fire_event.read().len() == 0;
-        if is_player_not_firing {
-            return;
+        for player_fire in player_fire_event.read() {
+            let (player_entity, player_position, player_rotation) = player.single();
+            let hit = unsafe {
+                raycast(
+                    player_position.0.xz(),
+                    player_rotation.forward().xz(),
+                    &[player_entity],
+                    movable_objects.iter(),
+                    static_objects.iter(),
+                )
+            };
+
+            if let Some(hit) = hit {
+                let (t, target_entity) = hit;
+                let collision_point = player_position.0 + t * player_rotation.forward();
+
+                log::trace!(
+                    "Hiting entity {:?} at location {:?}",
+                    target_entity,
+                    collision_point
+                );
+
+                saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity)
+            }
         }
-        let (player_entity, player_position, player_rotation) = player.single();
-        log::trace!(
-            "Fire event detected {:?} forward {:?}",
-            player_position.0.xz(),
-            player_rotation.forward().xz(),
-        );
+    }
 
-        log::trace!(
-            "Movable objects {} Static objects {}",
-            movable_objects.iter().len(),
-            static_objects.iter().len()
-        );
-        let hit = unsafe {
-            raycast(
-                player_position.0.xz(),
-                player_rotation.forward().xz(),
-                &[player_entity],
-                movable_objects.iter(),
-                static_objects.iter(),
-            )
-        };
-
-        if let Some(hit) = hit {
-            let (t, target_entity) = hit;
-            let collision_point = player_position.0 + t * player_rotation.forward();
-
-            log::trace!(
-                "Hiting entity {:?} at location {:?}",
-                target_entity,
-                collision_point
-            );
-
-            saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity)
+    fn on_entity_death(
+        graphics: Res<Graphics>,
+        mut death_event_reader: EventReader<DeathEvent>,
+        entities_with_mesh: Query<
+            (
+                Entity,
+                Option<&Mesh>,
+                Option<&MainTexture>,
+                Option<&MeshRenderingInfo>,
+            ),
+            Without<Player>,
+        >,
+        mut commands: Commands,
+    ) {
+        log::trace!("Cleaning up dead target");
+        let all_dead_targets: HashSet<Entity> = death_event_reader
+            .read()
+            .map(|death_event| death_event.target)
+            .collect();
+        unsafe {
+            graphics.device_wait_idle().unwrap();
         }
+        entities_with_mesh
+            .iter()
+            .filter(|(entity, _, _, _)| all_dead_targets.contains(entity))
+            .for_each(|(entity, mesh, main_texture, mesh_rendering_info)| {
+                if let (Some(mesh), Some(main_texture), Some(mesh_rendering_info)) =
+                    (mesh, main_texture, mesh_rendering_info)
+                {
+                    saga_renderer::remove_mesh(
+                        graphics.as_ref(),
+                        mesh,
+                        main_texture,
+                        mesh_rendering_info,
+                    );
+                }
+                commands.entity(entity).despawn();
+            });
     }
 
     fn player_shooting(
@@ -656,15 +689,14 @@ mod doomclone_game {
     }
 
     fn system_animate_camera(
-        mut camera : Query<(&mut Position, &mut Rotation), With<Camera>>,
-        player: Query<(&Position, &Rotation), (With<Player>, Without<Camera>)>
+        mut camera: Query<(&mut Position, &mut Rotation), With<Camera>>,
+        player: Query<(&Position, &Rotation), (With<Player>, Without<Camera>)>,
     ) {
         let (player_position, player_rotation) = player.single();
         let (mut camera_position, mut camera_rotation) = camera.single_mut();
         camera_position.0 = player_position.0;
         camera_rotation.0 = player_rotation.0;
     }
-
 
     fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
         let path_to_obj = std::env::current_dir()
@@ -916,21 +948,26 @@ mod saga_combat {
 
     #[derive(Event)]
     pub struct DamageEvent {
-        damage: u32,
-        target: Entity,
-        source: Entity,
+        pub damage: u32,
+        pub target: Entity,
+        pub source: Entity,
     }
 
     #[derive(Event)]
     pub struct DeathEvent {
-        target: Entity,
+        pub target: Entity,
     }
 
-    pub fn deal_damage(damage_event_writer: &mut EventWriter<DamageEvent>, damage: u32, target: Entity, source: Entity) {
+    pub fn deal_damage(
+        damage_event_writer: &mut EventWriter<DamageEvent>,
+        damage: u32,
+        target: Entity,
+        source: Entity,
+    ) {
         damage_event_writer.send(DamageEvent {
             damage,
             target,
-            source
+            source,
         });
     }
 
@@ -949,13 +986,13 @@ mod saga_combat {
                 Err(QueryEntityError::AliasedMutability(_)) => continue,
             };
 
-            log::trace!("Enemy hit");
-
             // Decrement health
             health.current_health = if health.current_health > damage_event.damage {
                 health.current_health - damage_event.damage
             } else {
-                death_event_invoker.send(DeathEvent {target: damage_event.target});
+                death_event_invoker.send(DeathEvent {
+                    target: damage_event.target,
+                });
                 0
             };
         }
@@ -983,27 +1020,32 @@ mod saga_renderer {
                 .init_schedule(Cleanup)
                 .add_systems(
                     bevy_app::Last,
-                    draw.pipe(handle_swapchain_recreate)
-                        .pipe(recreate_swapchain)
-                        .pipe(log_error_result),
+                    system_draw
+                        .pipe(system_handle_swapchain_recreate)
+                        .pipe(system_recreate_swapchain)
+                        .pipe(system_log_error_result),
                 )
-                .add_systems(Cleanup, cleanup_camera)
-                .add_systems(Cleanup, cleanup_meshes)
+                .add_systems(
+                    bevy_app::Last,
+                    system_rebuild_on_mesh_removal.before(system_draw),
+                )
+                .add_systems(Cleanup, system_cleanup_camera)
+                .add_systems(Cleanup, system_cleanup_meshes)
                 .add_systems(
                     bevy_app::PostStartup,
-                    build_command_buffer.pipe(log_error_result),
+                    system_build_command_buffer.pipe(system_log_error_result),
                 )
-                .add_systems(bevy_app::Update, camera_on_screen_resize)
+                .add_systems(bevy_app::Update, system_camera_on_screen_resize)
                 .add_systems(
                     bevy_app::PostUpdate,
-                    update_mesh_fragment_information_on_change,
+                    system_update_mesh_fragment_information,
                 )
                 .add_systems(
                     bevy_app::PostStartup,
-                    update_mesh_fragment_information_on_post_startup,
+                    system_update_mesh_fragment_information,
                 )
-                .add_systems(bevy_app::PostStartup, finalize_descriptors)
-                .add_systems(bevy_app::PostUpdate, update_camera_view);
+                .add_systems(bevy_app::PostStartup, system_finalize_descriptors)
+                .add_systems(bevy_app::PostUpdate, system_update_camera_view);
         }
     }
 
@@ -1034,7 +1076,7 @@ mod saga_renderer {
         pub tint: Vector4<f32>,
     }
 
-    fn camera_on_screen_resize(
+    fn system_camera_on_screen_resize(
         mut resize_event: EventReader<Resize>,
         window: Res<Window>,
         mut cameras: Query<(&mut Camera, &mut CameraRenderingInfo)>,
@@ -1054,11 +1096,42 @@ mod saga_renderer {
         }
     }
 
-    fn build_command_buffer(
+    fn system_build_command_buffer(
         graphics: Res<Graphics>,
         meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) -> Result<()> {
         build_command_buffer_from_graphics(&graphics, meshes)
+    }
+
+    fn system_rebuild_on_mesh_removal(
+        graphics: Res<Graphics>,
+        mut removals: RemovedComponents<Mesh>,
+        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
+    ) {
+        let has_any_mesh_been_removed = removals.read().count() > 0;
+        if has_any_mesh_been_removed {
+            system_build_command_buffer(graphics, meshes).unwrap();
+        }
+    }
+
+    /// Must be called before trying to queue up destroying the mesh
+    pub fn remove_mesh(
+        graphics: &Graphics,
+        mesh: &Mesh,
+        main_texture: &MainTexture,
+        rendering_info: &MeshRenderingInfo,
+    ) {
+        unsafe {
+            rendering_info
+                .vertex_uniform_buffers
+                .destroy_uniform_buffer_series(&graphics);
+            rendering_info
+                .fragment_uniform_buffers
+                .destroy_uniform_buffer_series(&graphics);
+            mesh.gpu_mesh.destroy(&graphics);
+            main_texture.texture.destroy_with_graphics(&graphics);
+            main_texture.sampler.destroy_with_graphics(&graphics);
+        }
     }
 
     fn build_command_buffer_from_graphics(
@@ -1088,7 +1161,7 @@ mod saga_renderer {
         }
     }
 
-    fn finalize_descriptors(graphics: ResMut<Graphics>) {
+    fn system_finalize_descriptors(graphics: ResMut<Graphics>) {
         graphics.descriptor_writer.write(graphics.get_device());
     }
 
@@ -1112,22 +1185,12 @@ mod saga_renderer {
         Ok(())
     }
 
-    fn update_mesh_fragment_information_on_change(
+    fn system_update_mesh_fragment_information(
         graphics: ResMut<Graphics>,
         mesh_query: Query<
             (&MeshRenderingInfo, &MeshFragmentUniformObject),
             Changed<MeshFragmentUniformObject>,
         >,
-    ) {
-        for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
-            update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info)
-                .unwrap();
-        }
-    }
-
-    fn update_mesh_fragment_information_on_post_startup(
-        graphics: ResMut<Graphics>,
-        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentUniformObject)>,
     ) {
         for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
             update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info)
@@ -1167,7 +1230,9 @@ mod saga_renderer {
         Ok(())
     }
 
-    fn update_camera_view(mut cameras: Query<(&Position, &Rotation, &mut CameraRenderingInfo)>) {
+    fn system_update_camera_view(
+        mut cameras: Query<(&Position, &Rotation, &mut CameraRenderingInfo)>,
+    ) {
         for (position, rotation, mut rendering_info) in cameras.iter_mut() {
             rendering_info.view = Camera::calculate_view_matrix(&position, rotation);
         }
@@ -1196,7 +1261,7 @@ mod saga_renderer {
         Ok(())
     }
 
-    fn draw(
+    fn system_draw(
         window: Res<Window>,
         mut graphics: ResMut<Graphics>,
         camera_query: Query<(&Camera, &CameraRenderingInfo)>,
@@ -1221,7 +1286,7 @@ mod saga_renderer {
         }
     }
 
-    fn handle_swapchain_recreate(In(should_recreate_swapchain): In<Result<bool>>) -> bool {
+    fn system_handle_swapchain_recreate(In(should_recreate_swapchain): In<Result<bool>>) -> bool {
         let recreate_swapchain = match should_recreate_swapchain {
             Ok(should_recreate_swapchain) => should_recreate_swapchain,
             Err(err) => {
@@ -1232,7 +1297,7 @@ mod saga_renderer {
         recreate_swapchain
     }
 
-    fn recreate_swapchain(
+    fn system_recreate_swapchain(
         In(should_recreate_swapchain): In<bool>,
         window: Res<Window>,
         mut graphics: ResMut<Graphics>,
@@ -1261,7 +1326,7 @@ mod saga_renderer {
         Ok(())
     }
 
-    fn log_error_result(In(result): In<Result<()>>) {
+    fn system_log_error_result(In(result): In<Result<()>>) {
         if let Err(error) = result {
             log::error!("Error: {}", error)
         }
@@ -1269,7 +1334,7 @@ mod saga_renderer {
 
     fn discard_error_result(In(result): In<Result<()>>) {}
 
-    fn cleanup_meshes(
+    fn system_cleanup_meshes(
         graphics: Res<Graphics>,
         meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) {
@@ -1290,7 +1355,7 @@ mod saga_renderer {
         log::info!("[Saga] Cleaning up all {} meshes", meshes.iter().count());
     }
 
-    fn cleanup_camera(graphics: Res<Graphics>, cameras: Query<&CameraRenderingInfo>) {
+    fn system_cleanup_camera(graphics: Res<Graphics>, cameras: Query<&CameraRenderingInfo>) {
         let graphics = graphics.as_ref();
         for camera_rendering_info in &cameras {
             unsafe {
@@ -1672,7 +1737,7 @@ mod saga_collision {
                         })
                         .map(|v| (v.x.to_bits(), v.y.to_bits())) // map to bits to perform unique
                         .unique()
-                        .map(|(x,y)| cgmath::vec2(f32::from_bits(x), f32::from_bits(y)))
+                        .map(|(x, y)| cgmath::vec2(f32::from_bits(x), f32::from_bits(y)))
                         .combinations(2)
                         .map(|pair| {
                             if pair[0] == pair[1] {
@@ -2034,7 +2099,6 @@ mod saga_collision {
         direction: Vector2<f32>,
     ) -> Option<f32> {
         if line_segment.is_point_on_line(point) {
-            log::trace!("Point on line");
             return if line_segment.is_point_in_band(point) {
                 Some(0.0)
             } else {
@@ -2048,18 +2112,17 @@ mod saga_collision {
 
         let is_line_behind_point = cgmath::dot(normal_scaled, direction) >= 0.0;
         if is_line_behind_point {
-            log::trace!("Point behind line");
             return None;
         }
 
-        let t = (to_point_projected_on_normal.magnitude2() / direction_projected_on_normal.magnitude2()).sqrt();
+        let t = (to_point_projected_on_normal.magnitude2()
+            / direction_projected_on_normal.magnitude2())
+        .sqrt();
         let projected_point = point + direction * t;
 
         if line_segment.is_point_in_band(projected_point) {
-            log::trace!("Collision at {}", t);
             Some(t)
         } else {
-            log::trace!("Point hit line but not segment");
             None
         }
     }

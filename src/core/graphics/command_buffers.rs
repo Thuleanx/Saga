@@ -1,5 +1,6 @@
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
+use vulkanalia::vk::CommandBufferResetFlags;
 
 use super::queue_families::QueueFamilyIndices;
 use super::Graphics;
@@ -51,7 +52,7 @@ where
             depth_stencil: vk::ClearDepthStencilValue {
                 depth: 1.0,
                 stencil: 0,
-            }
+            },
         };
 
         let clear_values = &[color_clear_value, depth_clear_value];
@@ -88,6 +89,14 @@ pub unsafe fn create_command_pool(
     let command_pool = device.create_command_pool(&info, None)?;
 
     Ok(command_pool)
+}
+
+pub unsafe fn reset_command_buffer(
+    device: &Device,
+    command_buffer: vk::CommandBuffer,
+) -> Result<()> {
+    device.reset_command_buffer(command_buffer, CommandBufferResetFlags::empty())?;
+    Ok(())
 }
 
 pub unsafe fn destroy_command_pool(device: &Device, command_pool: vk::CommandPool) {
