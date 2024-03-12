@@ -358,7 +358,12 @@ mod doomclone_game {
     };
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
-        component::Component, entity::Entity, event::{EventReader, EventWriter}, query::{With, Without}, schedule::{common_conditions::on_event, IntoSystemConfigs}, system::{Commands, Local, Query, Res, ResMut}
+        component::Component,
+        entity::Entity,
+        event::{EventReader, EventWriter},
+        query::{With, Without},
+        schedule::{common_conditions::on_event, IntoSystemConfigs},
+        system::{Commands, Local, Query, Res, ResMut},
     };
     use bevy_time::Time;
     use cgmath::{
@@ -385,7 +390,10 @@ mod doomclone_game {
                 .add_systems(bevy_app::Update, system_animate_camera)
                 .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, on_player_shot)
-                .add_systems(bevy_app::Update, on_entity_death.run_if(on_event::<DeathEvent>()))
+                .add_systems(
+                    bevy_app::Update,
+                    on_entity_death.run_if(on_event::<DeathEvent>()),
+                )
                 .add_systems(bevy_app::Update, player_reload)
                 .add_systems(bevy_app::Update, player_movement)
                 .add_systems(bevy_app::Update, system_player_rotate_with_mouse_x)
@@ -612,6 +620,15 @@ mod doomclone_game {
 
                 rotation.0 = Quaternion::look_at(-look_direction, up);
             }
+        }
+    }
+
+    fn enemy_ai(
+        player: Query<&Position, With<Player>>,
+        mut enemies: Query<(&Position, &mut Velocity, &MovementSpeed), With<Enemy>>,
+    ) {
+        let player_position = player.single();
+        for (position, mut velocity, movement_speed) in enemies.iter_mut() {
         }
     }
 
@@ -1027,13 +1044,20 @@ mod saga_renderer {
                 )
                 .add_systems(
                     bevy_app::Last,
-                    system_rebuild_on_mesh_removal.before(system_draw),
+                    system_build_command_buffer
+                        .run_if(any_component_removed::<Mesh>())
+                        .before(system_draw),
+                )
+                .add_systems(
+                    bevy_app::Last,
+                    system_build_command_buffer
+                        .before(system_draw),
                 )
                 .add_systems(Cleanup, system_cleanup_camera)
                 .add_systems(Cleanup, system_cleanup_meshes)
                 .add_systems(
                     bevy_app::PostStartup,
-                    system_build_command_buffer.pipe(system_log_error_result),
+                    system_build_command_buffer
                 )
                 .add_systems(bevy_app::Update, system_camera_on_screen_resize)
                 .add_systems(
@@ -1096,22 +1120,14 @@ mod saga_renderer {
         }
     }
 
+    fn should_rebuild_command_buffer() {
+    }
+
     fn system_build_command_buffer(
         graphics: Res<Graphics>,
         meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
-    ) -> Result<()> {
-        build_command_buffer_from_graphics(&graphics, meshes)
-    }
-
-    fn system_rebuild_on_mesh_removal(
-        graphics: Res<Graphics>,
-        mut removals: RemovedComponents<Mesh>,
-        meshes: Query<(&Mesh, &MainTexture, &MeshRenderingInfo)>,
     ) {
-        let has_any_mesh_been_removed = removals.read().count() > 0;
-        if has_any_mesh_been_removed {
-            system_build_command_buffer(graphics, meshes).unwrap();
-        }
+        build_command_buffer_from_graphics(&graphics, meshes).unwrap()
     }
 
     /// Must be called before trying to queue up destroying the mesh
