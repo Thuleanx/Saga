@@ -38,7 +38,7 @@ Essential tasks list
 
 List of things to do on last day
 - [x] Flash on damage
-- [ ] Knockback enemy on hit
+- [x] Knockback enemy on hit
 - [ ] Enemy damage player
 - [ ] Enemy spawner
 - [ ] Waves

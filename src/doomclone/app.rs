@@ -343,7 +343,9 @@ mod doomclone_game {
         core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
         doomclone::app::{
             saga_collision::{self, CircleCollider, Movable, Velocity},
-            saga_combat, Camera, CameraRenderingInfo,
+            saga_combat,
+            saga_renderer::RebuildCommand,
+            Camera, CameraRenderingInfo,
         },
     };
     use bevy_app::{App, Plugin};
@@ -616,7 +618,11 @@ mod doomclone_game {
                 );
 
                 saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity);
-                saga_collision::apply_knockback(&mut knockback_event, target_entity, gun.knockback_force * player_rotation.forward().xz());
+                saga_collision::apply_knockback(
+                    &mut knockback_event,
+                    target_entity,
+                    gun.knockback_force * player_rotation.forward().xz(),
+                );
             }
         }
     }
@@ -624,6 +630,7 @@ mod doomclone_game {
     fn on_entity_death(
         graphics: Res<Graphics>,
         mut death_event_reader: EventReader<DeathEvent>,
+        mut rebuild_command_writer: EventWriter<RebuildCommand>,
         entities_with_mesh: Query<
             (
                 Entity,
@@ -659,6 +666,7 @@ mod doomclone_game {
                 }
                 commands.entity(entity).despawn();
             });
+        rebuild_command_writer.send(RebuildCommand);
     }
 
     fn system_player_shooting(
@@ -1173,11 +1181,6 @@ mod saga_renderer {
                         .run_if(on_event::<RebuildCommand>())
                         .before(system_draw),
                 )
-                // .add_systems(
-                //     bevy_app::Last,
-                //     system_build_command_buffer
-                //         .before(system_draw),
-                // )
                 .add_systems(Cleanup, system_cleanup_camera)
                 .add_systems(Cleanup, system_cleanup_meshes)
                 .add_systems(bevy_app::PostStartup, system_build_command_buffer)
@@ -1185,6 +1188,10 @@ mod saga_renderer {
                 .add_systems(
                     bevy_app::PostUpdate,
                     system_update_mesh_fragment_information,
+                )
+                .add_systems(
+                    bevy_app::PostStartup,
+                    system_signal_rebuild_on_mesh_added,
                 )
                 .add_systems(
                     bevy_app::PostStartup,
@@ -1242,6 +1249,20 @@ mod saga_renderer {
         pub main_texture: MainTexture,
         pub fragment_data: MeshFragmentData,
         pub rendering_info: MeshRenderingInfo,
+    }
+
+    fn system_signal_rebuild_on_mesh_added(
+        graphics: Res<Graphics>,
+        mut rebuild_command: EventWriter<RebuildCommand>,
+        meshes_added: Query<(), Added<Mesh>>,
+    ) {
+        let did_any_mesh_added = meshes_added.iter().next().is_some();
+        unsafe {
+            graphics.device_wait_idle().unwrap();
+        }
+        if did_any_mesh_added {
+            rebuild_command.send(RebuildCommand);
+        }
     }
 
     fn system_camera_on_screen_resize(
@@ -2054,9 +2075,11 @@ mod saga_collision {
             }
         }
 
-        knockbackables.iter_mut().for_each(|(entity, mut knockbackable)| {
-            knockbackable.amount += knockback_accumulated[&entity];
-        });
+        knockbackables
+            .iter_mut()
+            .for_each(|(entity, mut knockbackable)| {
+                knockbackable.amount += knockback_accumulated[&entity];
+            });
     }
 
     fn collision_system(
