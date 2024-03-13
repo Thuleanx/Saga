@@ -387,6 +387,7 @@ mod doomclone_game {
                 .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
+                .add_systems(bevy_app::Update, system_enemy_ai)
                 .add_systems(bevy_app::Update, system_animate_camera)
                 .add_systems(bevy_app::Update, player_shooting)
                 .add_systems(bevy_app::Update, on_player_shot)
@@ -623,12 +624,20 @@ mod doomclone_game {
         }
     }
 
-    fn enemy_ai(
+    fn system_enemy_ai(
         player: Query<&Position, With<Player>>,
         mut enemies: Query<(&Position, &mut Velocity, &MovementSpeed), With<Enemy>>,
     ) {
         let player_position = player.single();
         for (position, mut velocity, movement_speed) in enemies.iter_mut() {
+            let displacement_to_player = player_position.0 - position.0;
+            let direction_to_player = if displacement_to_player.magnitude2() == 0.0 {
+                displacement_to_player
+            } else {
+                displacement_to_player.normalize()
+            };
+
+            velocity.0 = (movement_speed.0 * direction_to_player).xz();
         }
     }
 
@@ -1048,11 +1057,11 @@ mod saga_renderer {
                         .run_if(any_component_removed::<Mesh>())
                         .before(system_draw),
                 )
-                .add_systems(
-                    bevy_app::Last,
-                    system_build_command_buffer
-                        .before(system_draw),
-                )
+                // .add_systems(
+                //     bevy_app::Last,
+                //     system_build_command_buffer
+                //         .before(system_draw),
+                // )
                 .add_systems(Cleanup, system_cleanup_camera)
                 .add_systems(Cleanup, system_cleanup_meshes)
                 .add_systems(
