@@ -326,7 +326,12 @@ fn construct_mesh(
 }
 
 mod doomclone_game {
-    use std::{collections::{HashMap, HashSet}, ops::Not, path::PathBuf, time::Duration};
+    use std::{
+        collections::{HashMap, HashSet},
+        ops::Not,
+        path::PathBuf,
+        time::Duration,
+    };
 
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
@@ -354,7 +359,10 @@ mod doomclone_game {
         entity::Entity,
         event::{EventReader, EventWriter},
         query::{Changed, With, Without},
-        schedule::{common_conditions::on_event, IntoSystemConfigs, States, SystemSet},
+        schedule::{
+            common_conditions::{in_state, on_event},
+            IntoSystemConfigs, NextState, OnEnter, OnExit, States, SystemSet,
+        },
         system::{Commands, Local, ParamSet, Query, Res, ResMut, Resource},
     };
     use bevy_time::{Time, Timer, TimerMode};
@@ -388,44 +396,55 @@ mod doomclone_game {
 
     impl Plugin for GamePlugin {
         fn build(&self, app: &mut App) {
+            populate_wave_data(app);
+
+            app.add_systems(bevy_app::Startup, (spawn_player, spawn_camera))
+                .add_systems(
+                    OnEnter(AppState::Gameplay),
+                    (spawn_map, spawn_gun, spawn_enemy),
+                )
+                // .add_systems(bevy_app::Startup, spawn_music)
+                .add_systems(
+                    bevy_app::Update,
+                    (
+                        spawn_enemy_on_interval
+                            .in_set(GameplaySet)
+                            .run_if(in_state(AppState::Gameplay)),
+                        system_flash_on_damage,
+                        animate_gun_shot,
+                        animate_look_at_player,
+                        system_enemy_ai,
+                        system_animate_camera,
+                        system_gun_update,
+                        system_player_shooting,
+                        on_player_shot,
+                        on_entity_death.run_if(on_event::<DeathEvent>()),
+                        player_movement,
+                        system_player_rotate_with_mouse_x,
+                        system_loss_condition.run_if(in_state(AppState::Gameplay)),
+                    ),
+                )
+                .add_systems(OnEnter(AppState::Gameplay), system_recenter_player)
+                .add_systems(
+                    OnExit(AppState::Gameplay),
+                    (system_recenter_player, system_cleanup_everything),
+                )
+                .add_systems(bevy_app::PostUpdate, animate_gun)
+                .add_event::<GunFire>()
+                .add_event::<GunReload>();
+
             app.insert_state(AppState::Gameplay);
             app.insert_state(GameplayStage::Wave1);
-
-            app.add_systems(
-                bevy_app::Startup,
-                (spawn_camera, spawn_map, spawn_gun, spawn_enemy),
-            )
-            // .add_systems(bevy_app::Startup, spawn_music)
-            .add_systems(
-                bevy_app::Update,
-                (
-                    spawn_enemy_on_interval.in_set(GameplaySet),
-                    system_flash_on_damage,
-                    animate_gun_shot,
-                    animate_look_at_player,
-                    system_enemy_ai,
-                    system_animate_camera,
-                    system_gun_update,
-                    system_player_shooting,
-                    on_player_shot,
-                    on_entity_death.run_if(on_event::<DeathEvent>()),
-                    player_movement,
-                    system_player_rotate_with_mouse_x,
-                ),
-            )
-            .add_systems(bevy_app::PostUpdate, animate_gun)
-            .add_event::<GunFire>()
-            .add_event::<GunReload>();
         }
     }
 
     struct EnemyTemplate {
+        radius: f32,
         damage_radius: f32,
         movement_speed: f32,
         scale: f32,
         knockback_resistance: f32,
         path_to_texture: PathBuf,
-        path_to_obj: PathBuf,
     }
 
     #[derive(Resource)]
@@ -438,13 +457,42 @@ mod doomclone_game {
 
     struct WaveData {
         data: Vec<EnemyWaveData>,
-        number_of_enemies: u32,
+        batch_spawn_at_start: u32,
+        number_of_remaining_enemies: u32,
+        spawning_interval: Duration,
     }
 
     #[derive(Resource)]
     struct AllWaveData(HashMap<GameplayStage, WaveData>);
 
     fn populate_wave_data(app: &mut App) {
+        let enemy_templates = AllEnemyTemplates(vec![EnemyTemplate {
+            radius: 1.0,
+            damage_radius: 2.1,
+            movement_speed: 2.0,
+            scale: 4.0,
+            knockback_resistance: 1.0,
+            path_to_texture: std::env::current_dir()
+                .unwrap()
+                .join("assets")
+                .join("png")
+                .join("seaborn.png"),
+        }]);
+        let wavedata_0 = WaveData {
+            data: vec![EnemyWaveData {
+                enemy_id: 0,
+                weight: 1.0,
+            }],
+            batch_spawn_at_start: 10,
+            number_of_remaining_enemies: 20,
+            spawning_interval: Duration::from_millis(5000),
+        };
+
+        let mut wave_datas = HashMap::new();
+        wave_datas.insert(GameplayStage::Wave1, wavedata_0);
+
+        app.insert_resource(enemy_templates);
+        app.insert_resource(AllWaveData(wave_datas));
     }
 
     #[derive(Component)]
@@ -520,6 +568,64 @@ mod doomclone_game {
 
     #[derive(bevy_ecs::event::Event)]
     struct GunReload;
+
+    fn system_loss_condition(
+        mut app_state: ResMut<NextState<AppState>>,
+        player: Query<&Health, With<Player>>,
+    ) {
+        let player_health = player.single();
+
+        if player_health.current_health == 0 {
+            log::trace!("Player is Dead");
+            app_state.set(AppState::Loss);
+        }
+    }
+
+    fn system_recenter_player(mut player: Query<(&mut Position, &mut Rotation), With<Player>>) {
+        if player.is_empty() {
+            return;
+        }
+        log::trace!("Player recentered ");
+        let (mut position, mut rotation) = player.single_mut();
+        position.0 = Vector3::new(0.0, 2.0, 0.0);
+        rotation.0 = Quaternion::one();
+    }
+
+    // only player and gun survives any transition
+    fn system_cleanup_everything(
+        graphics: Res<Graphics>,
+        all_entities_to_clean_up: Query<
+            (
+                Entity,
+                Option<&Mesh>,
+                Option<&MainTexture>,
+                Option<&MeshRenderingInfo>,
+            ),
+            (Without<Player>, Without<Gun>, Without<Camera>),
+        >,
+        mut rebuild_command_writer: EventWriter<RebuildCommand>,
+        mut commands: Commands,
+    ) {
+        unsafe {
+            graphics.device_wait_idle().unwrap();
+        }
+        all_entities_to_clean_up.iter().for_each(
+            |(entity, mesh, main_texture, mesh_rendering_info)| {
+                if let (Some(mesh), Some(main_texture), Some(mesh_rendering_info)) =
+                    (mesh, main_texture, mesh_rendering_info)
+                {
+                    saga_renderer::remove_mesh(
+                        graphics.as_ref(),
+                        mesh,
+                        main_texture,
+                        mesh_rendering_info,
+                    );
+                }
+                commands.entity(entity).despawn();
+            },
+        );
+        rebuild_command_writer.send(RebuildCommand);
+    }
 
     fn animate_gun(
         mut is_not_first_frame: Local<bool>,
@@ -916,6 +1022,9 @@ mod doomclone_game {
         mut camera: Query<(&mut Position, &mut Rotation), With<Camera>>,
         player: Query<(&Position, &Rotation), (With<Player>, Without<Camera>)>,
     ) {
+        if player.is_empty() || camera.is_empty() {
+            return;
+        }
         let (player_position, player_rotation) = player.single();
         let (mut camera_position, mut camera_rotation) = camera.single_mut();
         camera_position.0 = player_position.0;
@@ -1091,7 +1200,7 @@ mod doomclone_game {
             Player,
             MovementSpeed(8.0),
             CircleCollider { radius: 1.0 },
-            Health::new(10),
+            Health::new(5),
             position,
             rotation,
             turn_speed,
@@ -1181,8 +1290,8 @@ mod saga_combat {
 
     #[derive(Component)]
     pub struct Health {
-        current_health: u32,
-        max_health: u32,
+        pub current_health: u32,
+        pub max_health: u32,
     }
 
     #[derive(Component)]
