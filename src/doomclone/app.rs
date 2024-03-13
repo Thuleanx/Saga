@@ -326,7 +326,7 @@ fn construct_mesh(
 }
 
 mod doomclone_game {
-    use std::{collections::HashSet, ops::Not, time::Duration};
+    use std::{collections::{HashMap, HashSet}, ops::Not, path::PathBuf, time::Duration};
 
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
@@ -354,8 +354,8 @@ mod doomclone_game {
         entity::Entity,
         event::{EventReader, EventWriter},
         query::{Changed, With, Without},
-        schedule::{common_conditions::on_event, IntoSystemConfigs},
-        system::{Commands, Local, ParamSet, Query, Res, ResMut},
+        schedule::{common_conditions::on_event, IntoSystemConfigs, States, SystemSet},
+        system::{Commands, Local, ParamSet, Query, Res, ResMut, Resource},
     };
     use bevy_time::{Time, Timer, TimerMode};
     use cgmath::{
@@ -367,35 +367,84 @@ mod doomclone_game {
 
     type Quat = cgmath::Quaternion<f32>;
 
+    #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
+    enum AppState {
+        Gameplay,
+        Win,
+        Loss,
+    }
+
+    #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
+    enum GameplayStage {
+        Wave1,
+        Wave2,
+        Wave3,
+    }
+
+    #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+    struct GameplaySet;
+
     pub struct GamePlugin;
 
     impl Plugin for GamePlugin {
         fn build(&self, app: &mut App) {
-            app.add_systems(bevy_app::Startup, spawn_camera)
-                .add_systems(bevy_app::Startup, spawn_player)
-                .add_systems(bevy_app::Startup, spawn_map)
-                .add_systems(bevy_app::Startup, spawn_gun)
-                .add_systems(bevy_app::Startup, spawn_enemy)
-                // .add_systems(bevy_app::Startup, spawn_music)
-                .add_systems(bevy_app::Update, spawn_enemy_on_interval)
-                .add_systems(bevy_app::Update, system_flash_on_damage)
-                .add_systems(bevy_app::Update, animate_gun_shot)
-                .add_systems(bevy_app::Update, animate_look_at_player)
-                .add_systems(bevy_app::Update, system_enemy_ai)
-                .add_systems(bevy_app::Update, system_animate_camera)
-                .add_systems(bevy_app::Update, system_gun_update)
-                .add_systems(bevy_app::Update, system_player_shooting)
-                .add_systems(bevy_app::Update, on_player_shot)
-                .add_systems(
-                    bevy_app::Update,
+            app.insert_state(AppState::Gameplay);
+            app.insert_state(GameplayStage::Wave1);
+
+            app.add_systems(
+                bevy_app::Startup,
+                (spawn_camera, spawn_map, spawn_gun, spawn_enemy),
+            )
+            // .add_systems(bevy_app::Startup, spawn_music)
+            .add_systems(
+                bevy_app::Update,
+                (
+                    spawn_enemy_on_interval.in_set(GameplaySet),
+                    system_flash_on_damage,
+                    animate_gun_shot,
+                    animate_look_at_player,
+                    system_enemy_ai,
+                    system_animate_camera,
+                    system_gun_update,
+                    system_player_shooting,
+                    on_player_shot,
                     on_entity_death.run_if(on_event::<DeathEvent>()),
-                )
-                .add_systems(bevy_app::Update, player_movement)
-                .add_systems(bevy_app::Update, system_player_rotate_with_mouse_x)
-                .add_systems(bevy_app::PostUpdate, animate_gun)
-                .add_event::<GunFire>()
-                .add_event::<GunReload>();
+                    player_movement,
+                    system_player_rotate_with_mouse_x,
+                ),
+            )
+            .add_systems(bevy_app::PostUpdate, animate_gun)
+            .add_event::<GunFire>()
+            .add_event::<GunReload>();
         }
+    }
+
+    struct EnemyTemplate {
+        damage_radius: f32,
+        movement_speed: f32,
+        scale: f32,
+        knockback_resistance: f32,
+        path_to_texture: PathBuf,
+        path_to_obj: PathBuf,
+    }
+
+    #[derive(Resource)]
+    struct AllEnemyTemplates(Vec<EnemyTemplate>);
+
+    struct EnemyWaveData {
+        enemy_id: u32,
+        weight: f32,
+    }
+
+    struct WaveData {
+        data: Vec<EnemyWaveData>,
+        number_of_enemies: u32,
+    }
+
+    #[derive(Resource)]
+    struct AllWaveData(HashMap<GameplayStage, WaveData>);
+
+    fn populate_wave_data(app: &mut App) {
     }
 
     #[derive(Component)]
@@ -1256,6 +1305,21 @@ mod saga_renderer {
                 .init_schedule(Cleanup)
                 .add_event::<RebuildCommand>()
                 .add_systems(
+                    bevy_app::PostStartup,
+                    (
+                        system_build_command_buffer,
+                        system_update_mesh_fragment_information,
+                        system_finalize_descriptors,
+                    ),
+                )
+                .add_systems(bevy_app::Update, system_camera_on_screen_resize)
+                .add_systems(
+                    bevy_app::PostUpdate,
+                    system_update_mesh_fragment_information,
+                )
+                .add_systems(bevy_app::PostUpdate, system_update_camera_view)
+                .add_systems(bevy_app::PostUpdate, system_signal_rebuild_on_mesh_added)
+                .add_systems(
                     bevy_app::Last,
                     system_draw
                         .pipe(system_handle_swapchain_recreate)
@@ -1269,20 +1333,7 @@ mod saga_renderer {
                         .before(system_draw),
                 )
                 .add_systems(Cleanup, system_cleanup_camera)
-                .add_systems(Cleanup, system_cleanup_meshes)
-                .add_systems(bevy_app::PostStartup, system_build_command_buffer)
-                .add_systems(bevy_app::Update, system_camera_on_screen_resize)
-                .add_systems(
-                    bevy_app::PostUpdate,
-                    system_update_mesh_fragment_information,
-                )
-                .add_systems(bevy_app::PostUpdate, system_signal_rebuild_on_mesh_added)
-                .add_systems(
-                    bevy_app::PostStartup,
-                    system_update_mesh_fragment_information,
-                )
-                .add_systems(bevy_app::PostStartup, system_finalize_descriptors)
-                .add_systems(bevy_app::PostUpdate, system_update_camera_view);
+                .add_systems(Cleanup, system_cleanup_meshes);
         }
     }
 
