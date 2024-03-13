@@ -765,6 +765,10 @@ pub mod graphics_utility {
         CPUMesh, GPUMesh, Graphics, Image, ImageSampler, LoadedImage, UniformBufferSeries,
     };
 
+    pub fn descriptor_writer_write(graphics: &mut Graphics) {
+        graphics.descriptor_writer.write(&graphics.device);
+    }
+
     impl UniformBufferSeries {
         pub unsafe fn create_from_graphics<T>(graphics: &Graphics) -> Result<Self> {
             uniform_buffer::create_series::<T>(

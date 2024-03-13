@@ -377,6 +377,7 @@ mod doomclone_game {
                 .add_systems(bevy_app::Startup, spawn_gun)
                 .add_systems(bevy_app::Startup, spawn_enemy)
                 // .add_systems(bevy_app::Startup, spawn_music)
+                .add_systems(bevy_app::Update, spawn_enemy_on_interval)
                 .add_systems(bevy_app::Update, system_flash_on_damage)
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
@@ -778,15 +779,16 @@ mod doomclone_game {
 
             let knockback_strength = 2.0;
 
-            log::trace!("Invulnerable {} Close enough {}", invulnerable, close_enough_to_deal_damage);
-
             if !invulnerable && close_enough_to_deal_damage {
                 saga_combat::deal_damage(&mut damage_event_writer, 1, player_entity, enemy_entity);
-                saga_collision::apply_knockback(&mut knockback_event_writer, player_entity, direction_to_player.xz() * knockback_strength);
+                saga_collision::apply_knockback(
+                    &mut knockback_event_writer,
+                    player_entity,
+                    direction_to_player.xz() * knockback_strength,
+                );
             }
         }
     }
-
 
     #[rustfmt::skip]
     fn player_movement(
@@ -902,6 +904,26 @@ mod doomclone_game {
             RelativeRotation(rotation),
             mesh_rendering_bundle,
         ));
+    }
+
+    fn spawn_enemy_on_interval(
+        time: Res<Time>,
+        mut is_not_first_frame: Local<bool>,
+        mut cooldown: Local<Timer>,
+        graphics: ResMut<Graphics>,
+        commands: Commands,
+    ) {
+        if is_not_first_frame.not() {
+            *cooldown = Timer::from_seconds(4.0, TimerMode::Repeating);
+        }
+        *is_not_first_frame = true;
+
+        cooldown.tick(time.delta());
+
+        if cooldown.just_finished() {
+            log::trace!("Spawning");
+            spawn_enemy(graphics, commands);
+        }
     }
 
     fn spawn_enemy(mut graphics: ResMut<Graphics>, mut commands: Commands) {
@@ -1200,13 +1222,16 @@ mod saga_combat {
 
     fn system_iframe(
         time: Res<Time>,
-        mut param_set: ParamSet<(
-            Query<&mut IFrame, Changed<Health>>,
-            Query<&mut IFrame>
-        )>
+        mut param_set: ParamSet<(Query<&mut IFrame, Changed<Health>>, Query<&mut IFrame>)>,
     ) {
-        param_set.p0().iter_mut().for_each(|mut iframe| iframe.activate());
-        param_set.p1().iter_mut().for_each(|mut iframe| iframe.tick(time.delta()));
+        param_set
+            .p0()
+            .iter_mut()
+            .for_each(|mut iframe| iframe.activate());
+        param_set
+            .p1()
+            .iter_mut()
+            .for_each(|mut iframe| iframe.tick(time.delta()));
     }
 }
 
@@ -1218,7 +1243,7 @@ mod saga_renderer {
     use cgmath::{Matrix3, Matrix4, SquareMatrix, Vector4};
     use vulkanalia::vk;
 
-    use crate::core::graphics::{Graphics, StartRenderResult};
+    use crate::core::graphics::{graphics_utility, Graphics, StartRenderResult};
 
     use super::{saga_window::Window, Camera, CameraRenderingInfo, MainTexture, Mesh};
     use super::{MeshRenderingInfo, Position, Rotation, Scale};
@@ -1251,7 +1276,7 @@ mod saga_renderer {
                     bevy_app::PostUpdate,
                     system_update_mesh_fragment_information,
                 )
-                .add_systems(bevy_app::PostStartup, system_signal_rebuild_on_mesh_added)
+                .add_systems(bevy_app::PostUpdate, system_signal_rebuild_on_mesh_added)
                 .add_systems(
                     bevy_app::PostStartup,
                     system_update_mesh_fragment_information,
@@ -1311,7 +1336,7 @@ mod saga_renderer {
     }
 
     fn system_signal_rebuild_on_mesh_added(
-        graphics: Res<Graphics>,
+        graphics: ResMut<Graphics>,
         mut rebuild_command: EventWriter<RebuildCommand>,
         meshes_added: Query<(), Added<Mesh>>,
     ) {
@@ -1320,7 +1345,9 @@ mod saga_renderer {
             graphics.device_wait_idle().unwrap();
         }
         if did_any_mesh_added {
+            log::trace!("Mesh added");
             rebuild_command.send(RebuildCommand);
+            system_finalize_descriptors(graphics);
         }
     }
 
@@ -1398,8 +1425,9 @@ mod saga_renderer {
         }
     }
 
-    fn system_finalize_descriptors(graphics: ResMut<Graphics>) {
-        graphics.descriptor_writer.write(graphics.get_device());
+    fn system_finalize_descriptors(mut graphics: ResMut<Graphics>) {
+        log::trace!("Write finalized descriptors");
+        graphics_utility::descriptor_writer_write(graphics.as_mut());
     }
 
     pub fn update_mesh_fragment_information(

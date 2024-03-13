@@ -64,7 +64,7 @@ impl DescriptorWriter {
         })
     }
 
-    pub fn write(&self, device: &Device) {
+    pub fn write(&mut self, device: &Device) {
         let writes: Vec<vk::WriteDescriptorSetBuilder<'_>> = self
             .image_writes
             .iter()
@@ -89,6 +89,8 @@ impl DescriptorWriter {
         unsafe {
             device.update_descriptor_sets(&writes, &[] as &[vk::CopyDescriptorSet]);
         }
+
+        self.clear();
     }
 
     pub fn clear(&mut self) {

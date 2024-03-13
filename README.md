@@ -39,11 +39,12 @@ Essential tasks list
 List of things to do on last day
 - [x] Flash on damage
 - [x] Knockback enemy on hit
-- [ ] Enemy damage player
+- [x] Enemy damage player
 - [ ] Enemy spawner
 - [ ] Waves
-- [ ] End game room (shoot target to reload)
 - [ ] Blender make room
+- [ ] End game room (shoot target to reload)
+- [ ] Death
 - [ ] Dash ability
 
 Technical improvements
