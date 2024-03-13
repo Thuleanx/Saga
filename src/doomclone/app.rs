@@ -11,7 +11,7 @@ use cgmath::{vec3, Angle, Vector2};
 use std::path::Path;
 use vulkanalia::prelude::v1_0::*;
 
-use self::saga_renderer::MeshFragmentUniformObject;
+use self::saga_renderer::{MeshFragmentData, MeshFragmentUniformObject};
 
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
@@ -223,7 +223,7 @@ fn construct_mesh_with_cpu_mesh(
     Mesh,
     MainTexture,
     MeshRenderingInfo,
-    MeshFragmentUniformObject,
+    MeshFragmentData,
     CPUMesh,
 )> {
     let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh).unwrap() };
@@ -305,7 +305,7 @@ fn construct_mesh_with_cpu_mesh(
             fragment_uniform_buffers,
             descriptor_sets,
         },
-        MeshFragmentUniformObject {
+        MeshFragmentData {
             tint: cgmath::vec4(1.0, 1.0, 1.0, 1.0),
         },
         cpu_mesh,
@@ -320,7 +320,7 @@ fn construct_mesh(
     Mesh,
     MainTexture,
     MeshRenderingInfo,
-    MeshFragmentUniformObject,
+    MeshFragmentData,
     CPUMesh,
 )> {
     let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
@@ -774,6 +774,7 @@ mod doomclone_game {
             CircleCollider { radius: 1.0 },
             LookAtPlayer,
             Movable,
+            Velocity(Vector2::zero()),
             Health::new(10),
             mesh,
             main_texture,
@@ -1103,10 +1104,23 @@ mod saga_renderer {
         pub model: Matrix4<f32>,
     }
 
-    #[repr(C)]
     #[derive(Copy, Clone, Debug, Component)]
+    pub struct MeshFragmentData {
+        pub tint: Vector4<f32>,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
     pub struct MeshFragmentUniformObject {
         pub tint: Vector4<f32>,
+    }
+
+    impl MeshFragmentUniformObject {
+        pub fn new(data: &MeshFragmentData) -> Self {
+            Self {
+                tint: data.tint,
+            }
+        }
     }
 
     fn system_camera_on_screen_resize(
@@ -1193,17 +1207,18 @@ mod saga_renderer {
     pub fn update_mesh_fragment_information(
         graphics: &ResMut<Graphics>,
         mesh_rendering_info: &MeshRenderingInfo,
-        mesh_fragment_info: &MeshFragmentUniformObject,
+        mesh_fragment_info: &MeshFragmentData,
     ) -> Result<()> {
         let number_of_buffers_to_update = mesh_rendering_info
             .fragment_uniform_buffers
             .get_number_of_buffers();
+        let mesh_fragment_uniform_object = MeshFragmentUniformObject::new(mesh_fragment_info);
         for index in 0..number_of_buffers_to_update {
             unsafe {
                 graphics.update_uniform_buffer_series(
                     &mesh_rendering_info.fragment_uniform_buffers,
                     index,
-                    &mesh_fragment_info,
+                    &mesh_fragment_uniform_object,
                 )?;
             }
         }
@@ -1213,8 +1228,8 @@ mod saga_renderer {
     fn system_update_mesh_fragment_information(
         graphics: ResMut<Graphics>,
         mesh_query: Query<
-            (&MeshRenderingInfo, &MeshFragmentUniformObject),
-            Changed<MeshFragmentUniformObject>,
+            (&MeshRenderingInfo, &MeshFragmentData),
+            Changed<MeshFragmentData>,
         >,
     ) {
         for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
