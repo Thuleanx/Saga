@@ -332,7 +332,7 @@ mod doomclone_game {
         construct_mesh, construct_mesh_with_cpu_mesh,
         saga_audio::{AudioEmitter, AudioRuntimeManager},
         saga_collision::{raycast, KnockbackEvent, Knockbackable, MeshCollider},
-        saga_combat::{DamageEvent, DeathEvent, Health},
+        saga_combat::{DamageEvent, DeathEvent, Health, IFrame},
         saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
         saga_renderer::{self, CameraUniformBufferObject, MeshFragmentData},
         saga_window::Window,
@@ -401,7 +401,9 @@ mod doomclone_game {
     struct Player;
 
     #[derive(Component)]
-    struct Enemy;
+    struct Enemy {
+        damage_radius: f32,
+    }
 
     #[derive(Component)]
     struct LookAtPlayer;
@@ -751,11 +753,13 @@ mod doomclone_game {
     }
 
     fn system_enemy_ai(
-        player: Query<&Position, With<Player>>,
-        mut enemies: Query<(&Position, &mut Velocity, &MovementSpeed), With<Enemy>>,
+        player: Query<(Entity, &Position, Option<&IFrame>), With<Player>>,
+        mut damage_event_writer: EventWriter<DamageEvent>,
+        mut knockback_event_writer: EventWriter<KnockbackEvent>,
+        mut enemies: Query<(Entity, &Position, &mut Velocity, &MovementSpeed, &Enemy)>,
     ) {
-        let player_position = player.single();
-        for (position, mut velocity, movement_speed) in enemies.iter_mut() {
+        let (player_entity, player_position, iframe) = player.single();
+        for (enemy_entity, position, mut velocity, movement_speed, enemy) in enemies.iter_mut() {
             let displacement_to_player = player_position.0 - position.0;
             let direction_to_player = if displacement_to_player.magnitude2() == 0.0 {
                 displacement_to_player
@@ -764,8 +768,25 @@ mod doomclone_game {
             };
 
             velocity.0 = (movement_speed.0 * direction_to_player).xz();
+
+            let close_enough_to_deal_damage =
+                displacement_to_player.xz().magnitude2() <= enemy.damage_radius.powi(2);
+            let invulnerable = match iframe {
+                Some(iframe) => iframe.is_active(),
+                None => false,
+            };
+
+            let knockback_strength = 2.0;
+
+            log::trace!("Invulnerable {} Close enough {}", invulnerable, close_enough_to_deal_damage);
+
+            if !invulnerable && close_enough_to_deal_damage {
+                saga_combat::deal_damage(&mut damage_event_writer, 1, player_entity, enemy_entity);
+                saga_collision::apply_knockback(&mut knockback_event_writer, player_entity, direction_to_player.xz() * knockback_strength);
+            }
         }
     }
+
 
     #[rustfmt::skip]
     fn player_movement(
@@ -896,7 +917,7 @@ mod doomclone_game {
             construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
 
         let spawn = commands.spawn((
-            Enemy,
+            Enemy { damage_radius: 2.1 },
             Position(cgmath::vec3(0.0, 2.0, 0.0)),
             Rotation(Quat::one()),
             Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
@@ -1005,6 +1026,8 @@ mod doomclone_game {
             turn_speed,
             Movable,
             Velocity(Vector2::zero()),
+            Knockbackable::new(1.0),
+            IFrame::new(Duration::from_millis(1000)),
         ));
     }
 
@@ -1062,14 +1085,17 @@ mod doomclone_game {
 }
 
 mod saga_combat {
+    use std::time::Duration;
+
     use bevy_app::Plugin;
     use bevy_ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader, EventWriter},
-        query::QueryEntityError,
-        system::Query,
+        query::{Changed, QueryEntityError},
+        system::{ParamSet, Query, Res},
     };
+    use bevy_time::{Time, Timer};
 
     pub struct CombatPlugin;
 
@@ -1077,7 +1103,8 @@ mod saga_combat {
         fn build(&self, app: &mut bevy_app::App) {
             app.add_event::<DamageEvent>()
                 .add_event::<DeathEvent>()
-                .add_systems(bevy_app::Update, system_register_damage);
+                .add_systems(bevy_app::Update, system_register_damage)
+                .add_systems(bevy_app::Update, system_iframe);
         }
     }
 
@@ -1085,6 +1112,29 @@ mod saga_combat {
     pub struct Health {
         current_health: u32,
         max_health: u32,
+    }
+
+    #[derive(Component)]
+    pub struct IFrame(Timer);
+
+    impl IFrame {
+        pub fn new(duration: Duration) -> Self {
+            let mut time = Timer::new(duration, bevy_time::TimerMode::Once);
+            time.tick(duration);
+            Self(time)
+        }
+
+        pub fn is_active(&self) -> bool {
+            !self.0.finished()
+        }
+
+        pub fn activate(&mut self) {
+            self.0.reset()
+        }
+
+        pub fn tick(&mut self, delta: Duration) {
+            self.0.tick(delta);
+        }
     }
 
     impl Health {
@@ -1147,6 +1197,17 @@ mod saga_combat {
             };
         }
     }
+
+    fn system_iframe(
+        time: Res<Time>,
+        mut param_set: ParamSet<(
+            Query<&mut IFrame, Changed<Health>>,
+            Query<&mut IFrame>
+        )>
+    ) {
+        param_set.p0().iter_mut().for_each(|mut iframe| iframe.activate());
+        param_set.p1().iter_mut().for_each(|mut iframe| iframe.tick(time.delta()));
+    }
 }
 
 mod saga_renderer {
@@ -1168,6 +1229,7 @@ mod saga_renderer {
         fn build(&self, app: &mut bevy_app::App) {
             app.add_event::<Resize>()
                 .init_schedule(Cleanup)
+                .add_event::<RebuildCommand>()
                 .add_systems(
                     bevy_app::Last,
                     system_draw
@@ -1189,10 +1251,7 @@ mod saga_renderer {
                     bevy_app::PostUpdate,
                     system_update_mesh_fragment_information,
                 )
-                .add_systems(
-                    bevy_app::PostStartup,
-                    system_signal_rebuild_on_mesh_added,
-                )
+                .add_systems(bevy_app::PostStartup, system_signal_rebuild_on_mesh_added)
                 .add_systems(
                     bevy_app::PostStartup,
                     system_update_mesh_fragment_information,
@@ -2078,7 +2137,9 @@ mod saga_collision {
         knockbackables
             .iter_mut()
             .for_each(|(entity, mut knockbackable)| {
-                knockbackable.amount += knockback_accumulated[&entity];
+                if let Some(&knockback_amount) = knockback_accumulated.get(&entity) {
+                    knockbackable.amount += knockback_amount;
+                }
             });
     }
 
