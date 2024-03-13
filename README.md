@@ -36,6 +36,16 @@ Essential tasks list
 - [ ] Sound effects
 - [ ] Submit
 
+List of things to do on last day
+- [x] Flash on damage
+- [ ] Knockback enemy on hit
+- [ ] Enemy damage player
+- [ ] Enemy spawner
+- [ ] Waves
+- [ ] End game room (shoot target to reload)
+- [ ] Blender make room
+- [ ] Dash ability
+
 Technical improvements
 - [ ] Post processing stack (additional framebuffer)
 - [ ] Mip maps

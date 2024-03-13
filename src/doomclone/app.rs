@@ -11,7 +11,7 @@ use cgmath::{vec3, Angle, Vector2};
 use std::path::Path;
 use vulkanalia::prelude::v1_0::*;
 
-use self::saga_renderer::{MeshFragmentData, MeshFragmentUniformObject};
+use self::saga_renderer::{MeshFragmentData, MeshFragmentUniformObject, MeshRenderingBundle};
 
 type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
@@ -219,13 +219,7 @@ fn construct_mesh_with_cpu_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_texture: &Path,
     cpu_mesh: CPUMesh,
-) -> Result<(
-    Mesh,
-    MainTexture,
-    MeshRenderingInfo,
-    MeshFragmentData,
-    CPUMesh,
-)> {
+) -> Result<(MeshRenderingBundle, CPUMesh)> {
     let gpu_mesh = unsafe { GPUMesh::create(&graphics, &cpu_mesh).unwrap() };
 
     let texture = Image::load(&path_to_texture).unwrap();
@@ -295,18 +289,20 @@ fn construct_mesh_with_cpu_mesh(
         });
 
     Ok((
-        Mesh { gpu_mesh },
-        MainTexture {
-            texture: loaded_texture,
-            sampler: texture_sampler,
-        },
-        MeshRenderingInfo {
-            vertex_uniform_buffers,
-            fragment_uniform_buffers,
-            descriptor_sets,
-        },
-        MeshFragmentData {
-            tint: cgmath::vec4(1.0, 1.0, 1.0, 1.0),
+        MeshRenderingBundle {
+            mesh: Mesh { gpu_mesh },
+            main_texture: MainTexture {
+                texture: loaded_texture,
+                sampler: texture_sampler,
+            },
+            fragment_data: MeshFragmentData {
+                tint: cgmath::vec4(1.0, 1.0, 1.0, 1.0),
+            },
+            rendering_info: MeshRenderingInfo {
+                vertex_uniform_buffers,
+                fragment_uniform_buffers,
+                descriptor_sets,
+            },
         },
         cpu_mesh,
     ))
@@ -316,13 +312,7 @@ fn construct_mesh(
     graphics: &mut ResMut<Graphics>,
     path_to_obj: &Path,
     path_to_texture: &Path,
-) -> Result<(
-    Mesh,
-    MainTexture,
-    MeshRenderingInfo,
-    MeshFragmentData,
-    CPUMesh,
-)> {
+) -> Result<(MeshRenderingBundle, CPUMesh)> {
     let mut cpu_mesh = unsafe { CPUMesh::load_from_obj(&graphics, &path_to_obj) };
 
     if cpu_mesh.len() == 0 {
@@ -341,7 +331,7 @@ mod doomclone_game {
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
         saga_audio::{AudioEmitter, AudioRuntimeManager},
-        saga_collision::{raycast, MeshCollider},
+        saga_collision::{raycast, KnockbackEvent, Knockbackable, MeshCollider},
         saga_combat::{DamageEvent, DeathEvent, Health},
         saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
         saga_renderer::{self, CameraUniformBufferObject, MeshFragmentData},
@@ -352,7 +342,7 @@ mod doomclone_game {
     use crate::{
         core::graphics::{CPUMesh, Graphics, UniformBufferSeries},
         doomclone::app::{
-            saga_collision::{CircleCollider, Movable, Velocity},
+            saga_collision::{self, CircleCollider, Movable, Velocity},
             saga_combat, Camera, CameraRenderingInfo,
         },
     };
@@ -367,7 +357,8 @@ mod doomclone_game {
     };
     use bevy_time::{Time, Timer, TimerMode};
     use cgmath::{
-        Array, Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3, Vector4, Zero
+        Array, Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2,
+        Vector3, Vector4, Zero,
     };
     use kira::sound::static_sound::StaticSoundSettings;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
@@ -415,9 +406,7 @@ mod doomclone_game {
 
     enum FlashState {
         Inactive,
-        Active {
-            timer: Timer
-        }
+        Active { timer: Timer },
     }
 
     #[derive(Component)]
@@ -445,16 +434,23 @@ mod doomclone_game {
     struct Gun {
         magazine_size: u32,
         number_of_loaded_bullets: u32,
+        knockback_force: f32,
         firing_cooldown: Duration,
         reload_duration: Duration,
         gun_state: GunState,
     }
 
     impl Gun {
-        fn new(magazine_size: u32, firing_cooldown: Duration, reload_duration: Duration) -> Self {
+        fn new(
+            magazine_size: u32,
+            knockback_force: f32,
+            firing_cooldown: Duration,
+            reload_duration: Duration,
+        ) -> Self {
             Self {
                 magazine_size,
                 number_of_loaded_bullets: magazine_size,
+                knockback_force,
                 firing_cooldown,
                 reload_duration,
                 gun_state: GunState::ReadyToFire,
@@ -556,33 +552,41 @@ mod doomclone_game {
         mut flashing_entities: ParamSet<(
             Query<(&mut MeshFragmentData, &mut FlashOnDamage), Changed<Health>>,
             Query<(&mut MeshFragmentData, &mut FlashOnDamage)>,
-        )>
+        )>,
     ) {
         if *is_not_first_frame {
-            flashing_entities.p0().iter_mut().for_each(|(mut mesh_fragment_data, mut flash_on_damage)| {
-                flash_on_damage.flashing = FlashState::Active { timer: Timer::new(flash_on_damage.duration, TimerMode::Once) };
-                mesh_fragment_data.tint = Vector4::new(1.0, 0.0, 0.0, 1.0);
-            });
+            flashing_entities.p0().iter_mut().for_each(
+                |(mut mesh_fragment_data, mut flash_on_damage)| {
+                    flash_on_damage.flashing = FlashState::Active {
+                        timer: Timer::new(flash_on_damage.duration, TimerMode::Once),
+                    };
+                    mesh_fragment_data.tint = Vector4::new(1.0, 0.0, 0.0, 1.0);
+                },
+            );
         }
         *is_not_first_frame = true;
 
-        flashing_entities.p1().iter_mut().for_each(|(mut mesh_fragment_data, mut flash_on_damage)| {
-            let should_deactivate = match flash_on_damage.flashing {
-                FlashState::Inactive => false,
-                FlashState::Active { ref mut timer } => {
-                    timer.tick(time.delta());
-                    timer.finished()
+        flashing_entities.p1().iter_mut().for_each(
+            |(mut mesh_fragment_data, mut flash_on_damage)| {
+                let should_deactivate = match flash_on_damage.flashing {
+                    FlashState::Inactive => false,
+                    FlashState::Active { ref mut timer } => {
+                        timer.tick(time.delta());
+                        timer.finished()
+                    }
+                };
+                if should_deactivate {
+                    mesh_fragment_data.tint = Vector4::from_value(1.0);
                 }
-            };
-            if should_deactivate {
-                mesh_fragment_data.tint = Vector4::from_value(1.0);
-            }
-        });
+            },
+        );
     }
 
     fn on_player_shot(
         mut player_fire_event: EventReader<GunFire>,
         mut damage_event: EventWriter<DamageEvent>,
+        mut knockback_event: EventWriter<KnockbackEvent>,
+        gun: Query<&Gun>,
         player: Query<(Entity, &Position, &Rotation), With<Player>>,
         movable_objects: Query<(Entity, &Position, &CircleCollider)>,
         static_objects: Query<(Entity, &MeshCollider), Without<Movable>>,
@@ -599,6 +603,8 @@ mod doomclone_game {
                 )
             };
 
+            let gun = gun.single();
+
             if let Some(hit) = hit {
                 let (t, target_entity) = hit;
                 let collision_point = player_position.0 + t * player_rotation.forward();
@@ -609,7 +615,8 @@ mod doomclone_game {
                     collision_point
                 );
 
-                saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity)
+                saga_combat::deal_damage(&mut damage_event, 1, target_entity, player_entity);
+                saga_collision::apply_knockback(&mut knockback_event, target_entity, gun.knockback_force * player_rotation.forward().xz());
             }
         }
     }
@@ -847,22 +854,24 @@ mod doomclone_game {
             .join("png")
             .join("gun_texture.png");
 
-        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
+        let (mesh_rendering_bundle, _) =
             construct_mesh(&mut graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let position = cgmath::vec3(0.0, 0.0, 0.0);
         let rotation = Quat::one();
 
         let spawn = commands.spawn((
-            Gun::new(4, Duration::from_millis(200), Duration::from_millis(1000)),
+            Gun::new(
+                4,
+                1.0,
+                Duration::from_millis(200),
+                Duration::from_millis(1000),
+            ),
             Position(position),
             Rotation(rotation),
             RelativePosition(position),
             RelativeRotation(rotation),
-            mesh,
-            main_texture,
-            mesh_rendering_info,
-            mesh_fragment_info,
+            mesh_rendering_bundle,
         ));
     }
 
@@ -875,7 +884,7 @@ mod doomclone_game {
 
         let cpu_mesh = CPUMesh::get_simple_plane();
 
-        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
+        let (mesh_rendering_bundle, _) =
             construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
 
         let spawn = commands.spawn((
@@ -890,10 +899,8 @@ mod doomclone_game {
             MovementSpeed(2.0),
             Health::new(10),
             FlashOnDamage::new(Duration::from_millis(100)),
-            mesh,
-            main_texture,
-            mesh_rendering_info,
-            mesh_fragment_info,
+            Knockbackable::new(1.0),
+            mesh_rendering_bundle,
         ));
     }
 
@@ -931,7 +938,7 @@ mod doomclone_game {
             .join("png")
             .join("floor.png");
 
-        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, _) =
+        let (mesh_rendering_bundle, _) =
             construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let position = cgmath::vec3(0.0, 0.0, 0.0);
@@ -940,10 +947,7 @@ mod doomclone_game {
         let spawn = commands.spawn((
             Position(position),
             Rotation(rotation),
-            mesh,
-            main_texture,
-            mesh_rendering_info,
-            mesh_fragment_info,
+            mesh_rendering_bundle,
         ));
     }
 
@@ -959,7 +963,7 @@ mod doomclone_game {
             .join("png")
             .join("walls.png");
 
-        let (mesh, main_texture, mesh_rendering_info, mesh_fragment_info, cpu_mesh) =
+        let (mesh_rendering_bundle, cpu_mesh) =
             construct_mesh(graphics, &path_to_obj, &path_to_texture).unwrap();
 
         let mesh_collider: MeshCollider = MeshCollider::from(cpu_mesh);
@@ -970,11 +974,8 @@ mod doomclone_game {
         let spawn = commands.spawn((
             Position(position),
             Rotation(rotation),
-            mesh,
+            mesh_rendering_bundle,
             mesh_collider,
-            main_texture,
-            mesh_rendering_info,
-            mesh_fragment_info,
         ));
     }
 
@@ -1169,7 +1170,7 @@ mod saga_renderer {
                 .add_systems(
                     bevy_app::Last,
                     system_build_command_buffer
-                        .run_if(any_component_removed::<Mesh>())
+                        .run_if(on_event::<RebuildCommand>())
                         .before(system_draw),
                 )
                 // .add_systems(
@@ -1197,6 +1198,9 @@ mod saga_renderer {
     // Events
     #[derive(bevy_ecs::event::Event)]
     pub struct Resize;
+
+    #[derive(bevy_ecs::event::Event)]
+    pub struct RebuildCommand;
 
     // Schedules
     #[derive(Clone, Debug, PartialEq, Eq, Hash, ScheduleLabel)]
@@ -1232,6 +1236,14 @@ mod saga_renderer {
         }
     }
 
+    #[derive(Bundle)]
+    pub struct MeshRenderingBundle {
+        pub mesh: Mesh,
+        pub main_texture: MainTexture,
+        pub fragment_data: MeshFragmentData,
+        pub rendering_info: MeshRenderingInfo,
+    }
+
     fn system_camera_on_screen_resize(
         mut resize_event: EventReader<Resize>,
         window: Res<Window>,
@@ -1251,8 +1263,6 @@ mod saga_renderer {
             camera_rendering_info.projection = camera.calculate_projection_matrix();
         }
     }
-
-    fn should_rebuild_command_buffer() {}
 
     fn system_build_command_buffer(
         graphics: Res<Graphics>,
@@ -1831,11 +1841,15 @@ mod saga_input {
 }
 
 mod saga_collision {
+    use std::collections::HashMap;
+
     use bevy_app::{App, Plugin};
     use bevy_ecs::{
         component::Component,
         entity::Entity,
+        event::{Event, EventReader, EventWriter},
         query::{With, Without},
+        schedule::{common_conditions::on_event, IntoSystemConfigs},
         system::{Query, Res},
     };
     use bevy_time::Time;
@@ -1849,7 +1863,12 @@ mod saga_collision {
     pub struct CollisionPlugin;
     impl Plugin for CollisionPlugin {
         fn build(&self, app: &mut App) {
-            app.add_systems(bevy_app::Last, collision_system);
+            app.add_systems(bevy_app::Last, collision_system)
+                .add_event::<KnockbackEvent>()
+                .add_systems(
+                    bevy_app::Update,
+                    system_knockback_handler.run_if(on_event::<KnockbackEvent>()),
+                );
         }
     }
 
@@ -1909,6 +1928,27 @@ mod saga_collision {
 
     #[derive(Component)]
     pub struct Velocity(pub Vector2<f32>);
+
+    #[derive(Component)]
+    pub struct Knockbackable {
+        amount: Vector2<f32>,
+        resistance_as_scale: f32,
+    }
+
+    #[derive(Event)]
+    pub struct KnockbackEvent {
+        entity: Entity,
+        amount: Vector2<f32>,
+    }
+
+    impl Knockbackable {
+        pub fn new(resistance_as_scale: f32) -> Self {
+            Knockbackable {
+                amount: Vector2::zero(),
+                resistance_as_scale,
+            }
+        }
+    }
 
     #[derive(Clone, Copy)]
     pub struct Circle {
@@ -1992,28 +2032,65 @@ mod saga_collision {
         None,
     }
 
+    pub fn apply_knockback(
+        knockback_event_writer: &mut EventWriter<KnockbackEvent>,
+        entity: Entity,
+        amount: Vector2<f32>,
+    ) {
+        knockback_event_writer.send(KnockbackEvent { entity, amount });
+    }
+
+    fn system_knockback_handler(
+        mut knockback_event_reader: EventReader<KnockbackEvent>,
+        mut knockbackables: Query<(Entity, &mut Knockbackable)>,
+    ) {
+        let mut knockback_accumulated: HashMap<Entity, Vector2<f32>> = HashMap::new();
+        for knockback_event in knockback_event_reader.read() {
+            let KnockbackEvent { entity, amount } = knockback_event;
+            if let Some(base_amount) = knockback_accumulated.get_mut(entity) {
+                *base_amount += *amount;
+            } else {
+                knockback_accumulated.insert(*entity, *amount);
+            }
+        }
+
+        knockbackables.iter_mut().for_each(|(entity, mut knockbackable)| {
+            knockbackable.amount += knockback_accumulated[&entity];
+        });
+    }
+
     fn collision_system(
         time: Res<Time>,
-        movables: Query<(&mut Position, Option<&mut Velocity>, &CircleCollider), With<Movable>>,
+        movables: Query<
+            (
+                &mut Position,
+                Option<&mut Velocity>,
+                Option<&mut Knockbackable>,
+                &CircleCollider,
+            ),
+            With<Movable>,
+        >,
         static_objects: Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
     ) {
         const MAX_TRANSLATIONS: usize = 5;
         const MINIMUM_TRANSLATION_DISTANCE: f32 = 0.0001;
 
         unsafe {
-            for (index, (mut position, velocity, circle_collider)) in
+            for (index, (mut position, velocity, knockback, circle_collider)) in
                 movables.iter_unsafe().enumerate()
             {
-                if velocity.is_none() {
-                    continue;
-                }
+                let mut tracked_velocity = if let Some(ref velocity) = velocity {
+                    velocity.0
+                } else {
+                    Vector2::zero()
+                };
 
-                let mut velocity = velocity.unwrap();
-                if velocity.0.is_zero() {
-                    continue;
-                }
+                let mut movement = tracked_velocity * time.delta_seconds();
 
-                let mut movement = velocity.0 * time.delta_seconds();
+                if let Some(mut knockback) = knockback {
+                    movement += knockback.amount * knockback.resistance_as_scale;
+                    knockback.amount = Vector2::zero();
+                }
 
                 let circle_bound = Circle {
                     position: cgmath::vec2(position.0.x, position.0.z),
@@ -2051,8 +2128,12 @@ mod saga_collision {
                         Collision::WithPoint { point } => position_2d - point,
                     };
 
-                    velocity.0 = get_perpendicular(velocity.0, scaled_normal);
+                    tracked_velocity = get_perpendicular(tracked_velocity, scaled_normal);
                     movement = get_perpendicular(movement, scaled_normal);
+                }
+
+                if let Some(mut velocity) = velocity {
+                    velocity.0 = tracked_velocity;
                 }
             }
         }
@@ -2066,11 +2147,19 @@ mod saga_collision {
         movable_index: usize,
         circle_bound: Circle,
         direction: Vector2<f32>,
-        movables: &Query<(&mut Position, Option<&mut Velocity>, &CircleCollider), With<Movable>>,
+        movables: &Query<
+            (
+                &mut Position,
+                Option<&mut Velocity>,
+                Option<&mut Knockbackable>,
+                &CircleCollider,
+            ),
+            With<Movable>,
+        >,
         static_objects: &Query<(&Position, &Rotation, &MeshCollider), Without<Movable>>,
     ) -> (f32, Collision) {
         let collisions_with_dynamic_objects = movables.iter_unsafe().enumerate().map(
-            |(index_dynamic, (position, _, circle_collider))| {
+            |(index_dynamic, (position, _, _, circle_collider))| {
                 if movable_index == index_dynamic {
                     return None;
                 }
