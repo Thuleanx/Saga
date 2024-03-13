@@ -16,24 +16,22 @@ Essential tasks list
         - [x] Handle swapchain recreation
         - [x] Multiple uniform buffers (for model matrix)
         - [x] Render multiple meshes
-- [ ] Hand model
-- [ ] Enemy model
+- [x] Enemy model
 - [x] Simple scene setup
     - [x] Wall texture
 - [x] Player input capture
 - [x] Player camera
 - [x] Player movement
-- [ ] 2D Terrain Collision
+- [x] 2D Terrain Collision
     - [x] Circle - line segment
     - [x] Circle - circle
     - [x] Continuous Collision Detection Dynamic - Static
-    - [ ] Nudging for smoother experience
-- [ ] Enemy AI
-- [ ] ImGUI or something similar for general display / diagnostics
+    - [x] Nudging for smoother experience
+- [x] Enemy AI
 - [ ] Make stuff pretty somehow
 - [ ] Magic
-- [ ] Music
-    - [ ] Combat track
+- [x] Music
+    - [x] Combat track
     - [ ] Boss track
 - [ ] Sound effects
 - [ ] Submit

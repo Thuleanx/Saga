@@ -336,15 +336,15 @@ fn construct_mesh(
 }
 
 mod doomclone_game {
-    use std::{collections::HashSet, ops::Not};
+    use std::{collections::HashSet, ops::Not, time::Duration};
 
     use super::{
         construct_mesh, construct_mesh_with_cpu_mesh,
         saga_audio::{AudioEmitter, AudioRuntimeManager},
         saga_collision::{raycast, MeshCollider},
         saga_combat::{DamageEvent, DeathEvent, Health},
-        saga_input::{ButtonInput, KeyboardEvent, MouseButtonEvent, MouseChangeEvent},
-        saga_renderer::{self, CameraUniformBufferObject},
+        saga_input::{ButtonInput, MouseButtonEvent, MouseChangeEvent},
+        saga_renderer::{self, CameraUniformBufferObject, MeshFragmentData},
         saga_window::Window,
         MainTexture, Mesh, MeshRenderingInfo, MovementSpeed, Position, RelativePosition,
         RelativeRotation, Rotation, Scale, TurnSpeed,
@@ -361,14 +361,13 @@ mod doomclone_game {
         component::Component,
         entity::Entity,
         event::{EventReader, EventWriter},
-        query::{With, Without},
+        query::{Changed, With, Without},
         schedule::{common_conditions::on_event, IntoSystemConfigs},
-        system::{Commands, Local, Query, Res, ResMut},
+        system::{Commands, Local, ParamSet, Query, Res, ResMut},
     };
-    use bevy_time::Time;
+    use bevy_time::{Time, Timer, TimerMode};
     use cgmath::{
-        Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3,
-        Zero,
+        Array, Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2, Vector3, Vector4, Zero
     };
     use kira::sound::static_sound::StaticSoundSettings;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
@@ -384,18 +383,19 @@ mod doomclone_game {
                 .add_systems(bevy_app::Startup, spawn_map)
                 .add_systems(bevy_app::Startup, spawn_gun)
                 .add_systems(bevy_app::Startup, spawn_enemy)
-                .add_systems(bevy_app::Startup, spawn_music)
+                // .add_systems(bevy_app::Startup, spawn_music)
+                .add_systems(bevy_app::Update, system_flash_on_damage)
                 .add_systems(bevy_app::Update, animate_gun_shot)
                 .add_systems(bevy_app::Update, animate_look_at_player)
                 .add_systems(bevy_app::Update, system_enemy_ai)
                 .add_systems(bevy_app::Update, system_animate_camera)
-                .add_systems(bevy_app::Update, player_shooting)
+                .add_systems(bevy_app::Update, system_gun_update)
+                .add_systems(bevy_app::Update, system_player_shooting)
                 .add_systems(bevy_app::Update, on_player_shot)
                 .add_systems(
                     bevy_app::Update,
                     on_entity_death.run_if(on_event::<DeathEvent>()),
                 )
-                .add_systems(bevy_app::Update, player_reload)
                 .add_systems(bevy_app::Update, player_movement)
                 .add_systems(bevy_app::Update, system_player_rotate_with_mouse_x)
                 .add_systems(bevy_app::PostUpdate, animate_gun)
@@ -413,11 +413,60 @@ mod doomclone_game {
     #[derive(Component)]
     struct LookAtPlayer;
 
+    enum FlashState {
+        Inactive,
+        Active {
+            timer: Timer
+        }
+    }
+
     #[derive(Component)]
-    struct Gun;
+    struct FlashOnDamage {
+        flashing: FlashState,
+        duration: Duration,
+    }
+
+    impl FlashOnDamage {
+        pub fn new(duration: Duration) -> Self {
+            Self {
+                flashing: FlashState::Inactive,
+                duration,
+            }
+        }
+    }
+
+    enum GunState {
+        ReadyToFire,
+        WaitingForFire { timer: Timer },
+        Reloading { timer: Timer },
+    }
+
+    #[derive(Component)]
+    struct Gun {
+        magazine_size: u32,
+        number_of_loaded_bullets: u32,
+        firing_cooldown: Duration,
+        reload_duration: Duration,
+        gun_state: GunState,
+    }
+
+    impl Gun {
+        fn new(magazine_size: u32, firing_cooldown: Duration, reload_duration: Duration) -> Self {
+            Self {
+                magazine_size,
+                number_of_loaded_bullets: magazine_size,
+                firing_cooldown,
+                reload_duration,
+                gun_state: GunState::ReadyToFire,
+            }
+        }
+    }
 
     #[derive(bevy_ecs::event::Event)]
     struct GunFire;
+
+    #[derive(bevy_ecs::event::Event)]
+    struct GunBlankFire;
 
     #[derive(bevy_ecs::event::Event)]
     struct GunReload;
@@ -425,15 +474,13 @@ mod doomclone_game {
     fn animate_gun(
         mut is_not_first_frame: Local<bool>,
         time: Res<Time>,
-        mut gun: Query<
-            (
-                &mut Position,
-                &mut RelativePosition,
-                &mut Rotation,
-                &mut RelativeRotation,
-            ),
-            With<Gun>,
-        >,
+        mut gun: Query<(
+            &mut Position,
+            &mut RelativePosition,
+            &mut Rotation,
+            &mut RelativeRotation,
+            &Gun,
+        )>,
         player: Query<(&Position, &Rotation), (With<Player>, Without<Gun>)>,
     ) {
         const RESTING_POSITION: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
@@ -453,19 +500,22 @@ mod doomclone_game {
         if is_not_first_frame.not() {
             *is_not_first_frame = true;
 
-            for (_, mut relative_position, _, mut relative_rotation) in gun.iter_mut() {
+            for (_, mut relative_position, _, mut relative_rotation, _) in gun.iter_mut() {
                 relative_position.0 = RESTING_POSITION;
                 relative_rotation.0 = resting_rotation;
             }
         }
 
-        let desired_position = RESTING_POSITION;
-
-        let desired_rotation = resting_rotation;
-
-        for (mut position, mut relative_position, mut rotation, mut relative_rotation) in
+        for (mut position, mut relative_position, mut rotation, mut relative_rotation, gun) in
             gun.iter_mut()
         {
+            let (desired_position, desired_rotation) =
+                if matches!(gun.gun_state, GunState::Reloading { .. }) {
+                    (RELOAD_POSITION, reload_rotation)
+                } else {
+                    (RESTING_POSITION, resting_rotation)
+                };
+
             let smoothing_power = 1.0 - POSITIONAL_SMOOTHING.powf(time.delta_seconds());
 
             relative_position.0 =
@@ -498,6 +548,36 @@ mod doomclone_game {
                 relative_rotation.0 = firing_rotation;
             }
         }
+    }
+
+    fn system_flash_on_damage(
+        mut is_not_first_frame: Local<bool>,
+        time: Res<Time>,
+        mut flashing_entities: ParamSet<(
+            Query<(&mut MeshFragmentData, &mut FlashOnDamage), Changed<Health>>,
+            Query<(&mut MeshFragmentData, &mut FlashOnDamage)>,
+        )>
+    ) {
+        if *is_not_first_frame {
+            flashing_entities.p0().iter_mut().for_each(|(mut mesh_fragment_data, mut flash_on_damage)| {
+                flash_on_damage.flashing = FlashState::Active { timer: Timer::new(flash_on_damage.duration, TimerMode::Once) };
+                mesh_fragment_data.tint = Vector4::new(1.0, 0.0, 0.0, 1.0);
+            });
+        }
+        *is_not_first_frame = true;
+
+        flashing_entities.p1().iter_mut().for_each(|(mut mesh_fragment_data, mut flash_on_damage)| {
+            let should_deactivate = match flash_on_damage.flashing {
+                FlashState::Inactive => false,
+                FlashState::Active { ref mut timer } => {
+                    timer.tick(time.delta());
+                    timer.finished()
+                }
+            };
+            if should_deactivate {
+                mesh_fragment_data.tint = Vector4::from_value(1.0);
+            }
+        });
     }
 
     fn on_player_shot(
@@ -574,30 +654,61 @@ mod doomclone_game {
             });
     }
 
-    fn player_shooting(
+    fn system_player_shooting(
         mut mouse_button_events: EventReader<MouseButtonEvent>,
         mut player_fire_event: EventWriter<GunFire>,
+        mut player_reload_event: EventWriter<GunReload>,
+        mut gun: Query<&mut Gun>,
     ) {
-        for button_event in mouse_button_events.read() {
+        let left_mouse_pressed = mouse_button_events.read().any(|button_event| {
             let MouseButtonEvent { button, state } = button_event;
-            if (*button, *state) == (MouseButton::Left, ElementState::Pressed) {
-                player_fire_event.send(GunFire);
+            (*button, *state) == (MouseButton::Left, ElementState::Pressed)
+        });
+
+        let mut gun = gun.single_mut();
+        let ready_to_fire = matches!(gun.gun_state, GunState::ReadyToFire);
+        if !left_mouse_pressed || !ready_to_fire {
+            return;
+        }
+
+        let has_bullet_left = gun.number_of_loaded_bullets > 0;
+
+        if has_bullet_left {
+            player_fire_event.send(GunFire);
+            gun.number_of_loaded_bullets -= 1;
+        } else {
+            // & !has_bullet_left
+            player_reload_event.send(GunReload);
+            gun.number_of_loaded_bullets = gun.magazine_size;
+        }
+
+        gun.gun_state = if gun.number_of_loaded_bullets > 0 {
+            GunState::WaitingForFire {
+                timer: Timer::new(gun.firing_cooldown, TimerMode::Once),
+            }
+        } else {
+            GunState::Reloading {
+                timer: Timer::new(gun.reload_duration, TimerMode::Once),
             }
         }
     }
 
-    fn player_reload(
-        mut keyboard_events: EventReader<KeyboardEvent>,
-        mut player_reload_event: EventWriter<GunReload>,
-    ) {
-        for keyboard_event in keyboard_events.read() {
-            let KeyboardEvent {
-                scancode,
-                state,
-                keycode,
-            } = keyboard_event;
-            if (*keycode, *state) == (Key::R, ElementState::Pressed) {
-                player_reload_event.send(GunReload);
+    fn system_gun_update(time: Res<Time>, mut guns: Query<&mut Gun>) {
+        for mut gun in guns.iter_mut() {
+            let should_be_ready = match gun.gun_state {
+                GunState::WaitingForFire { ref mut timer } => {
+                    timer.tick(time.delta());
+                    timer.finished()
+                }
+                GunState::Reloading { ref mut timer } => {
+                    timer.tick(time.delta());
+                    timer.finished()
+                }
+                GunState::ReadyToFire => false,
+            };
+
+            if should_be_ready {
+                gun.gun_state = GunState::ReadyToFire;
             }
         }
     }
@@ -743,7 +854,7 @@ mod doomclone_game {
         let rotation = Quat::one();
 
         let spawn = commands.spawn((
-            Gun,
+            Gun::new(4, Duration::from_millis(200), Duration::from_millis(1000)),
             Position(position),
             Rotation(rotation),
             RelativePosition(position),
@@ -768,6 +879,7 @@ mod doomclone_game {
             construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
 
         let spawn = commands.spawn((
+            Enemy,
             Position(cgmath::vec3(0.0, 2.0, 0.0)),
             Rotation(Quat::one()),
             Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
@@ -775,7 +887,9 @@ mod doomclone_game {
             LookAtPlayer,
             Movable,
             Velocity(Vector2::zero()),
+            MovementSpeed(2.0),
             Health::new(10),
+            FlashOnDamage::new(Duration::from_millis(100)),
             mesh,
             main_texture,
             mesh_rendering_info,
@@ -1065,10 +1179,7 @@ mod saga_renderer {
                 // )
                 .add_systems(Cleanup, system_cleanup_camera)
                 .add_systems(Cleanup, system_cleanup_meshes)
-                .add_systems(
-                    bevy_app::PostStartup,
-                    system_build_command_buffer
-                )
+                .add_systems(bevy_app::PostStartup, system_build_command_buffer)
                 .add_systems(bevy_app::Update, system_camera_on_screen_resize)
                 .add_systems(
                     bevy_app::PostUpdate,
@@ -1117,9 +1228,7 @@ mod saga_renderer {
 
     impl MeshFragmentUniformObject {
         pub fn new(data: &MeshFragmentData) -> Self {
-            Self {
-                tint: data.tint,
-            }
+            Self { tint: data.tint }
         }
     }
 
@@ -1143,8 +1252,7 @@ mod saga_renderer {
         }
     }
 
-    fn should_rebuild_command_buffer() {
-    }
+    fn should_rebuild_command_buffer() {}
 
     fn system_build_command_buffer(
         graphics: Res<Graphics>,
@@ -1227,10 +1335,7 @@ mod saga_renderer {
 
     fn system_update_mesh_fragment_information(
         graphics: ResMut<Graphics>,
-        mesh_query: Query<
-            (&MeshRenderingInfo, &MeshFragmentData),
-            Changed<MeshFragmentData>,
-        >,
+        mesh_query: Query<(&MeshRenderingInfo, &MeshFragmentData), Changed<MeshFragmentData>>,
     ) {
         for (mesh_rendering_info, mesh_fragment_info) in mesh_query.iter() {
             update_mesh_fragment_information(&graphics, mesh_rendering_info, mesh_fragment_info)
