@@ -21,6 +21,7 @@ bevy_time = "0.13.0"
 itertools = "0.12.1"
 kira = "0.8.7"
 mint = "0.5.9"
+rand = "0.8"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

@@ -17,7 +17,7 @@ type Mat4 = cgmath::Matrix4<f32>;
 type Vec3 = cgmath::Vector3<f32>;
 type Quat = cgmath::Quaternion<f32>;
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 struct Position(Vec3);
 
 #[derive(Component)]
@@ -328,6 +328,7 @@ fn construct_mesh(
 mod doomclone_game {
     use std::{
         collections::{HashMap, HashSet},
+        marker::PhantomData,
         ops::Not,
         path::PathBuf,
         time::Duration,
@@ -371,6 +372,7 @@ mod doomclone_game {
         Vector3, Vector4, Zero,
     };
     use kira::sound::static_sound::StaticSoundSettings;
+    use rand::Rng;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
 
     type Quat = cgmath::Quaternion<f32>;
@@ -401,7 +403,14 @@ mod doomclone_game {
             app.add_systems(bevy_app::Startup, (spawn_player, spawn_camera, spawn_gun))
                 .add_systems(
                     OnEnter(AppState::Gameplay),
-                    (spawn_map, spawn_enemy),
+                    (
+                        system_cleanup_everything,
+                        spawn_map.after(system_cleanup_everything),
+                        spawn_enemy.after(system_cleanup_everything),
+                        spawn_spawn_points.after(system_cleanup_everything),
+                        system_recenter_player,
+                        system_heal_player_to_full,
+                    ),
                 )
                 // .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(
@@ -422,14 +431,21 @@ mod doomclone_game {
                         player_movement,
                         system_player_rotate_with_mouse_x,
                         system_loss_condition.run_if(in_state(AppState::Gameplay)),
-                        system_restart_on_restart_ui_killed.run_if(in_state(AppState::Win)).run_if(on_event::<DeathEvent>()),
-                        system_restart_on_restart_ui_killed.run_if(in_state(AppState::Loss)).run_if(on_event::<DeathEvent>()),
+                        system_restart_on_restart_ui_killed
+                            .run_if(in_state(AppState::Win))
+                            .run_if(on_event::<DeathEvent>()),
+                        system_restart_on_restart_ui_killed
+                            .run_if(in_state(AppState::Loss))
+                            .run_if(on_event::<DeathEvent>()),
                     ),
                 )
-                .add_systems(OnEnter(AppState::Gameplay), system_recenter_player)
                 .add_systems(
                     OnExit(AppState::Gameplay),
-                    (system_recenter_player, system_cleanup_everything, spawn_restart_ui.after(system_cleanup_everything)),
+                    (
+                        system_recenter_player,
+                        system_cleanup_everything,
+                        spawn_restart_ui.after(system_cleanup_everything),
+                    ),
                 )
                 .add_systems(bevy_app::PostUpdate, animate_gun)
                 .add_event::<GunFire>()
@@ -499,6 +515,19 @@ mod doomclone_game {
 
     #[derive(Component)]
     struct Player;
+
+    #[derive(Component)]
+    struct SpawnPoint<T> {
+        phantom: PhantomData<T>,
+    }
+
+    impl<T> SpawnPoint<T> {
+        fn new() -> Self {
+            Self {
+                phantom: PhantomData,
+            }
+        }
+    }
 
     #[derive(Component)]
     struct Enemy {
@@ -591,6 +620,12 @@ mod doomclone_game {
         let (mut position, mut rotation) = player.single_mut();
         position.0 = Vector3::new(0.0, 2.0, 0.0);
         rotation.0 = Quaternion::one();
+    }
+
+    fn system_heal_player_to_full(mut player: Query<&mut Health, With<Player>>) {
+        for mut player_health in player.iter_mut() {
+            player_health.current_health = player_health.max_health;
+        }
     }
 
     // only player and gun survives any transition
@@ -966,6 +1001,7 @@ mod doomclone_game {
         }
 
         for (position, rotation, mut velocity, movement_speed) in players.iter_mut() {
+            log::trace!("Position: {:?}", position.0);
             let mut forward = rotation.forward();
             forward.y = 0.0;
             if !forward.is_zero() {
@@ -1072,6 +1108,7 @@ mod doomclone_game {
         mut cooldown: Local<Timer>,
         graphics: ResMut<Graphics>,
         commands: Commands,
+        spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
     ) {
         if is_not_first_frame.not() {
             *cooldown = Timer::from_seconds(4.0, TimerMode::Repeating);
@@ -1082,11 +1119,15 @@ mod doomclone_game {
 
         if cooldown.just_finished() {
             log::trace!("Spawning");
-            spawn_enemy(graphics, commands);
+            spawn_enemy(graphics, commands, spawn_points);
         }
     }
 
-    fn spawn_enemy(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+    fn spawn_enemy(
+        mut graphics: ResMut<Graphics>,
+        mut commands: Commands,
+        spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
+    ) {
         let path_to_texture = std::env::current_dir()
             .unwrap()
             .join("assets")
@@ -1098,9 +1139,17 @@ mod doomclone_game {
         let (mesh_rendering_bundle, _) =
             construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
 
+        let total_spawn_points = spawn_points.iter().len();
+        let spawn_point = if total_spawn_points == 0 {
+            cgmath::vec3(0.0, 2.0, 0.0)
+        } else {
+            let index = rand::thread_rng().gen_range(0..total_spawn_points);
+            spawn_points.iter().nth(index).expect("This index should be within the spawn point length").0
+        };
+
         let spawn = commands.spawn((
             Enemy { damage_radius: 2.1 },
-            Position(cgmath::vec3(0.0, 2.0, 0.0)),
+            Position(spawn_point),
             Rotation(Quat::one()),
             Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
             CircleCollider { radius: 1.0 },
@@ -1314,6 +1363,17 @@ mod doomclone_game {
                 uniform_buffers,
             },
         ));
+    }
+
+    fn spawn_spawn_points(mut commands: Commands) {
+        let spawn_points: Vec<Vector3<f32>> = vec![
+            cgmath::vec3(0.0, 2.0, 8.0),
+            cgmath::vec3(0.0, 2.0, -8.0),
+        ];
+
+        spawn_points.iter().for_each(|&point| {
+            commands.spawn((Position(point), SpawnPoint::<Enemy>::new()));
+        });
     }
 }
 
