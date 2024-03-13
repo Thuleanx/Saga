@@ -40,7 +40,7 @@ List of things to do on last day
 - [x] Flash on damage
 - [x] Knockback enemy on hit
 - [x] Enemy damage playersssss
-- [ ] Enemy spawnessses
+- [x] Enemy spawnessses
 - [ ] Blender make room
 - [ ] End game room (shoot target to reload)
 - [ ] Death

@@ -361,7 +361,7 @@ mod doomclone_game {
         query::{Changed, With, Without},
         schedule::{
             common_conditions::{in_state, on_event},
-            IntoSystemConfigs, NextState, OnEnter, OnExit, States, SystemSet,
+            IntoSystemConfigs, NextState, OnEnter, OnExit, State, States, SystemSet,
         },
         system::{Commands, Local, ParamSet, Query, Res, ResMut, Resource},
     };
@@ -398,10 +398,10 @@ mod doomclone_game {
         fn build(&self, app: &mut App) {
             populate_wave_data(app);
 
-            app.add_systems(bevy_app::Startup, (spawn_player, spawn_camera))
+            app.add_systems(bevy_app::Startup, (spawn_player, spawn_camera, spawn_gun))
                 .add_systems(
                     OnEnter(AppState::Gameplay),
-                    (spawn_map, spawn_gun, spawn_enemy),
+                    (spawn_map, spawn_enemy),
                 )
                 // .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(
@@ -422,12 +422,14 @@ mod doomclone_game {
                         player_movement,
                         system_player_rotate_with_mouse_x,
                         system_loss_condition.run_if(in_state(AppState::Gameplay)),
+                        system_restart_on_restart_ui_killed.run_if(in_state(AppState::Win)).run_if(on_event::<DeathEvent>()),
+                        system_restart_on_restart_ui_killed.run_if(in_state(AppState::Loss)).run_if(on_event::<DeathEvent>()),
                     ),
                 )
                 .add_systems(OnEnter(AppState::Gameplay), system_recenter_player)
                 .add_systems(
                     OnExit(AppState::Gameplay),
-                    (system_recenter_player, system_cleanup_everything),
+                    (system_recenter_player, system_cleanup_everything, spawn_restart_ui.after(system_cleanup_everything)),
                 )
                 .add_systems(bevy_app::PostUpdate, animate_gun)
                 .add_event::<GunFire>()
@@ -1111,6 +1113,57 @@ mod doomclone_game {
             Knockbackable::new(1.0),
             mesh_rendering_bundle,
         ));
+    }
+
+    #[derive(Component)]
+    struct RestartUI;
+
+    fn spawn_restart_ui(
+        app_state: Res<State<AppState>>,
+        mut graphics: ResMut<Graphics>,
+        mut commands: Commands,
+    ) {
+        let state = app_state.get();
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("seaborn.png");
+
+        let cpu_mesh = CPUMesh::get_simple_plane();
+
+        let (mesh_rendering_bundle, _) =
+            construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
+
+        let spawn = commands.spawn((
+            RestartUI,
+            Position(cgmath::vec3(0.0, 2.0, -4.0)),
+            Rotation(Quat::one()),
+            Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
+            CircleCollider { radius: 1.0 },
+            LookAtPlayer,
+            Health::new(1),
+            mesh_rendering_bundle,
+        ));
+
+        spawn_map(graphics, commands);
+    }
+
+    fn system_restart_on_restart_ui_killed(
+        mut app_state: ResMut<NextState<AppState>>,
+        mut wave_state: ResMut<NextState<GameplayStage>>,
+        mut death_event_reader: EventReader<DeathEvent>,
+        query_restart_ui: Query<&RestartUI>,
+    ) {
+        let restart_hit = death_event_reader.read().any(|death_event| {
+            if let Ok(_) = query_restart_ui.get(death_event.target) {
+                true
+            } else {
+                false
+            }
+        });
+        wave_state.set(GameplayStage::Wave1);
+        app_state.set(AppState::Gameplay);
     }
 
     fn spawn_music(mut audio_manager: ResMut<AudioRuntimeManager>, mut commands: Commands) {
