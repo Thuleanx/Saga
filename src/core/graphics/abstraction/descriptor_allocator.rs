@@ -53,13 +53,13 @@ impl DescriptorAllocator {
     }
 
     unsafe fn allocate_once(
-        &self,
+        &mut self,
         device: &Device,
         descriptor_set_layout: vk::DescriptorSetLayout,
         number_of_set_layouts: usize,
     ) -> Result<Vec<vk::DescriptorSet>> {
-        if let Some(pool) = self.pools.get(self.pool_index) {
-            descriptor::set::create(device, pool, descriptor_set_layout, number_of_set_layouts)
+        if let Some(pool) = self.pools.get_mut(self.pool_index) {
+            pool.create(device, descriptor_set_layout, number_of_set_layouts)
         } else {
             Err(anyhow::anyhow!("Pool is empty, cannot allocate"))
         }
@@ -68,7 +68,7 @@ impl DescriptorAllocator {
     unsafe fn create_next_pool(&self, device: &Device) -> Result<descriptor::Pool> {
         let next_pool_size: u32 = match self.pools.last() {
             None => self.minimum_size,
-            Some(pool) => std::cmp::min(pool.get_size() * 2, self.maximum_size),
+            Some(pool) => std::cmp::min(pool.get_size() as u32 * 2, self.maximum_size),
         };
 
         let descriptions: Vec<descriptor::pool::PoolDescription> = self
@@ -93,10 +93,7 @@ impl DescriptorAllocator {
 
         for i in 0..number_of_pools_to_free {
             unsafe {
-                device.reset_descriptor_pool(
-                    self.pools[i].get_pool(),
-                    vk::DescriptorPoolResetFlags::empty(),
-                )?;
+                self.pools[i].free(device)?;
             }
         }
         self.pool_index = 0;
