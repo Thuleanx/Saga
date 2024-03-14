@@ -500,7 +500,7 @@ mod doomclone_game {
             EnemyTemplate {
                 radius: 0.5,
                 damage_radius: 1.7,
-                movement_speed: 4.0,
+                movement_speed: 3.0,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -521,12 +521,12 @@ mod doomclone_game {
                     .join("assets")
                     .join("png")
                     .join("gug.png"),
-                max_health: 3,
+                max_health: 2,
             },
             EnemyTemplate {
                 radius: 0.8,
                 damage_radius: 2.0,
-                movement_speed: 1.0,
+                movement_speed: 1.5,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -552,7 +552,7 @@ mod doomclone_game {
             EnemyTemplate {
                 radius: 0.5,
                 damage_radius: 1.7,
-                movement_speed: 3.0,
+                movement_speed: 0.5,
                 scale: 4.0,
                 knockback_resistance: 0.2,
                 path_to_texture: std::env::current_dir()
@@ -568,23 +568,23 @@ mod doomclone_game {
             data: vec![
                 EnemyWaveData {
                     enemy_id: 0,
-                    weight: 1.0,
+                    weight: 2.0,
                 },
                 EnemyWaveData {
                     enemy_id: 1,
                     weight: 0.5,
                 },
             ],
-            enemy_count: 50,
+            enemy_count: 30,
             enemy_cap: 20,
-            spawning_interval: Duration::from_millis(100),
+            spawning_interval: Duration::from_millis(500),
         };
 
         let wavedata_1 = WaveData {
             data: vec![
                 EnemyWaveData {
                     enemy_id: 0,
-                    weight: 1.0,
+                    weight: 2.0,
                 },
                 EnemyWaveData {
                     enemy_id: 1,
@@ -592,23 +592,23 @@ mod doomclone_game {
                 },
                 EnemyWaveData {
                     enemy_id: 2,
-                    weight: 0.5,
+                    weight: 0.2,
                 },
                 EnemyWaveData {
                     enemy_id: 3,
-                    weight: 0.5,
+                    weight: 1.5,
                 },
             ],
-            enemy_count: 150,
-            enemy_cap: 40,
-            spawning_interval: Duration::from_millis(500),
+            enemy_count: 45,
+            enemy_cap: 30,
+            spawning_interval: Duration::from_millis(200),
         };
 
         let wavedata_2 = WaveData {
             data: vec![
                 EnemyWaveData {
                     enemy_id: 0,
-                    weight: 1.0,
+                    weight: 3.0,
                 },
                 EnemyWaveData {
                     enemy_id: 1,
@@ -616,20 +616,20 @@ mod doomclone_game {
                 },
                 EnemyWaveData {
                     enemy_id: 2,
-                    weight: 1.0,
+                    weight: 0.5,
                 },
                 EnemyWaveData {
                     enemy_id: 3,
-                    weight: 0.2,
+                    weight: 3.0,
                 },
                 EnemyWaveData {
                     enemy_id: 4,
-                    weight: 0.01,
+                    weight: 0.2,
                 },
             ],
-            enemy_count: 200,
-            enemy_cap: 100,
-            spawning_interval: Duration::from_millis(500),
+            enemy_count: 60,
+            enemy_cap: 20,
+            spawning_interval: Duration::from_millis(200),
         };
 
         let mut wave_datas = HashMap::new();
@@ -887,7 +887,7 @@ mod doomclone_game {
                         .0;
 
 
-                    if (spawn_point - player_position.0).magnitude2() > exclusion_range {
+                    if (spawn_point - player_position.0).magnitude2() > exclusion_range * exclusion_range {
                         break;
                     }
                 }
@@ -988,8 +988,8 @@ mod doomclone_game {
         const RESTING_POSITION: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
         const RELOAD_POSITION: Vector3<f32> = cgmath::vec3(0.0, -2.334, 1.23);
 
-        const POSITIONAL_SMOOTHING: f32 = 0.1;
-        const ROTATIONAL_SMOOTHING: f32 = 0.1;
+        const POSITIONAL_SMOOTHING: f32 = 0.05;
+         const ROTATIONAL_SMOOTHING: f32 = 0.05;
 
         let resting_rotation: Quat =
             Quaternion::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg(180.0));
@@ -1385,6 +1385,9 @@ mod doomclone_game {
     }
 
     fn system_animate_camera(
+        time: Res<Time>,
+        button_input: Res<ButtonInput>,
+        mut camera_z_rotation: Local<f32>,
         mut camera: Query<(&mut Position, &mut Rotation), With<Camera>>,
         player: Query<(&Position, &Rotation), (With<Player>, Without<Camera>)>,
     ) {
@@ -1393,8 +1396,27 @@ mod doomclone_game {
         }
         let (player_position, player_rotation) = player.single();
         let (mut camera_position, mut camera_rotation) = camera.single_mut();
+
+        let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
+        let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
+
+        let horizontal_movement = (movement_d - movement_a) as f32;
+
+        const ROTATIONAL_SMOOTHING: f32 = 0.005;
+        let smoothing_power = 1.0 - ROTATIONAL_SMOOTHING.powf(time.delta_seconds());
+        let desired_rotation = 2.0 * horizontal_movement;
+
+        *camera_z_rotation = *camera_z_rotation * (1.0 - smoothing_power) +
+            desired_rotation * smoothing_power;
+
+        let reload_rotation: Quat = Quaternion::from(Euler {
+            x: Deg(0.0),
+            y: Deg(0.0),
+            z: Deg(*camera_z_rotation),
+        });
+
         camera_position.0 = player_position.0;
-        camera_rotation.0 = player_rotation.0;
+        camera_rotation.0 = player_rotation.0 * reload_rotation;
     }
 
     fn spawn_gun(
