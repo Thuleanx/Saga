@@ -416,13 +416,13 @@ mod doomclone_game {
                 .add_systems(
                     bevy_app::Update,
                     (
-                        // system_enemy_spawning
-                        //     .in_set(GameplaySet)
-                        //     .run_if(in_state(AppState::Gameplay)),
-                        // system_spawn_enemy_by_id
-                        //     .run_if(in_state(AppState::Gameplay))
-                        //     .run_if(on_event::<SpawnEnemy>())
-                        //     .after(system_enemy_spawning),
+                        system_enemy_spawning
+                            .in_set(GameplaySet)
+                            .run_if(in_state(AppState::Gameplay)),
+                        system_spawn_enemy_by_id
+                            .run_if(in_state(AppState::Gameplay))
+                            .run_if(on_event::<SpawnEnemy>())
+                            .after(system_enemy_spawning),
                         system_flash_on_damage,
                         animate_gun_shot,
                         animate_look_at_player,
@@ -500,7 +500,7 @@ mod doomclone_game {
             EnemyTemplate {
                 radius: 0.5,
                 damage_radius: 1.7,
-                movement_speed: 2.0,
+                movement_speed: 4.0,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -508,12 +508,12 @@ mod doomclone_game {
                     .join("assets")
                     .join("png")
                     .join("fleshling.png"),
-                max_health: 2,
+                max_health: 1,
             },
             EnemyTemplate {
                 radius: 1.0,
                 damage_radius: 2.2,
-                movement_speed: 1.0,
+                movement_speed: 2.0,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -521,12 +521,12 @@ mod doomclone_game {
                     .join("assets")
                     .join("png")
                     .join("gug.png"),
-                max_health: 5,
+                max_health: 3,
             },
             EnemyTemplate {
                 radius: 0.8,
                 damage_radius: 2.0,
-                movement_speed: 0.5,
+                movement_speed: 1.0,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -534,12 +534,12 @@ mod doomclone_game {
                     .join("assets")
                     .join("png")
                     .join("owlcat.png"),
-                max_health: 8,
+                max_health: 4,
             },
             EnemyTemplate {
                 radius: 1.0,
                 damage_radius: 2.2,
-                movement_speed: 4.0,
+                movement_speed: 5.0,
                 scale: 4.0,
                 knockback_resistance: 1.0,
                 path_to_texture: std::env::current_dir()
@@ -554,13 +554,13 @@ mod doomclone_game {
                 damage_radius: 1.7,
                 movement_speed: 3.0,
                 scale: 4.0,
-                knockback_resistance: 1.0,
+                knockback_resistance: 0.2,
                 path_to_texture: std::env::current_dir()
                     .unwrap()
                     .join("assets")
                     .join("png")
                     .join("akunohana.png"),
-                max_health: 3,
+                max_health: 20,
             },
         ]);
 
@@ -575,9 +575,9 @@ mod doomclone_game {
                     weight: 0.5,
                 },
             ],
-            enemy_count: 20,
-            enemy_cap: 5,
-            spawning_interval: Duration::from_millis(5000),
+            enemy_count: 50,
+            enemy_cap: 20,
+            spawning_interval: Duration::from_millis(100),
         };
 
         let wavedata_1 = WaveData {
@@ -599,9 +599,9 @@ mod doomclone_game {
                     weight: 0.5,
                 },
             ],
-            enemy_count: 25,
-            enemy_cap: 10,
-            spawning_interval: Duration::from_millis(2000),
+            enemy_count: 150,
+            enemy_cap: 40,
+            spawning_interval: Duration::from_millis(500),
         };
 
         let wavedata_2 = WaveData {
@@ -620,16 +620,16 @@ mod doomclone_game {
                 },
                 EnemyWaveData {
                     enemy_id: 3,
-                    weight: 1.0,
+                    weight: 0.2,
                 },
                 EnemyWaveData {
                     enemy_id: 4,
-                    weight: 1.0,
+                    weight: 0.01,
                 },
             ],
-            enemy_count: 30,
-            enemy_cap: 15,
-            spawning_interval: Duration::from_millis(1000),
+            enemy_count: 200,
+            enemy_cap: 100,
+            spawning_interval: Duration::from_millis(500),
         };
 
         let mut wave_datas = HashMap::new();
@@ -863,8 +863,10 @@ mod doomclone_game {
         mut graphics: ResMut<Graphics>,
         mut commands: Commands,
         enemy_templates: Res<AllEnemyTemplates>,
+        player_position: Query<&Position, With<Player>>,
         spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
     ) {
+        let player_position = player_position.single();
         let total_spawn_points = spawn_points.iter().len();
 
         for spawn_enemy_command in enemy_spawn_commands.read() {
@@ -872,12 +874,25 @@ mod doomclone_game {
             let spawn_point = if total_spawn_points == 0 {
                 cgmath::vec3(0.0, 2.0, 0.0)
             } else {
-                let index = rand::thread_rng().gen_range(0..total_spawn_points);
-                spawn_points
-                    .iter()
-                    .nth(index)
-                    .expect("This index should be within the spawn point length")
-                    .0
+                let exclusion_range = 5.0;
+
+                let mut spawn_point = Vector3::zero();
+
+                for _ in 0..40 {
+                    let index = rand::thread_rng().gen_range(0..total_spawn_points);
+                    spawn_point = spawn_points
+                        .iter()
+                        .nth(index)
+                        .expect("This index should be within the spawn point length")
+                        .0;
+
+
+                    if (spawn_point - player_position.0).magnitude2() > exclusion_range {
+                        break;
+                    }
+                }
+
+                spawn_point
             };
 
             let template = &enemy_templates.0[spawn_enemy_command.0 as usize];
@@ -1315,7 +1330,6 @@ mod doomclone_game {
         }
 
         for (position, rotation, mut velocity, movement_speed) in players.iter_mut() {
-            log::trace!("Position: {:?}", position.0);
             let mut forward = rotation.forward();
             forward.y = 0.0;
             if !forward.is_zero() {
@@ -1428,7 +1442,7 @@ mod doomclone_game {
             .join("sfx")
             .join("reload.mp3");
 
-        let sound_setting = StaticSoundSettings::default();
+        let sound_setting = StaticSoundSettings::default().playback_rate(2.0);
 
         let reload_audio_emitter = AudioEmitter::new(
             audio_manager.as_mut(),
@@ -1442,8 +1456,8 @@ mod doomclone_game {
             Gun::new(
                 4,
                 1.0,
-                Duration::from_millis(200),
-                Duration::from_millis(727),
+                Duration::from_millis(100),
+                Duration::from_millis(400),
             ),
             Position(position),
             Rotation(rotation),
