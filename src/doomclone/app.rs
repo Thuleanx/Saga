@@ -373,6 +373,7 @@ mod doomclone_game {
     };
     use itertools::Itertools;
     use kira::sound::static_sound::StaticSoundSettings;
+    use noise::{NoiseFn, Perlin};
     use rand::Rng;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
 
@@ -392,6 +393,9 @@ mod doomclone_game {
         Wave3,
     }
 
+    #[derive(Resource)]
+    struct Trauma(f32);
+
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     struct GameplaySet;
 
@@ -400,6 +404,7 @@ mod doomclone_game {
     impl Plugin for GamePlugin {
         fn build(&self, app: &mut App) {
             populate_wave_data(app);
+            app.insert_resource(Trauma(0.0));
 
             app.add_systems(bevy_app::Startup, (spawn_player, spawn_camera, spawn_gun))
                 .add_systems(
@@ -426,6 +431,7 @@ mod doomclone_game {
                         system_flash_on_damage,
                         animate_gun_shot,
                         animate_look_at_player,
+                        system_animate_wavy,
                         system_enemy_ai,
                         system_animate_camera,
                         system_gun_update,
@@ -454,6 +460,7 @@ mod doomclone_game {
                 .add_systems(bevy_app::PostUpdate, animate_gun)
                 .add_event::<GunFire>()
                 .add_event::<SpawnEnemy>()
+                .add_event::<Restart>()
                 .add_event::<GunReload>();
 
             app.insert_state(AppState::Gameplay);
@@ -552,7 +559,7 @@ mod doomclone_game {
             EnemyTemplate {
                 radius: 0.5,
                 damage_radius: 1.7,
-                movement_speed: 0.5,
+                movement_speed: 2.0,
                 scale: 4.0,
                 knockback_resistance: 0.2,
                 path_to_texture: std::env::current_dir()
@@ -560,7 +567,7 @@ mod doomclone_game {
                     .join("assets")
                     .join("png")
                     .join("akunohana.png"),
-                max_health: 20,
+                max_health: 8,
             },
         ]);
 
@@ -627,7 +634,7 @@ mod doomclone_game {
                     weight: 0.3,
                 },
             ],
-            enemy_count: 50,
+            enemy_count: 100,
             enemy_cap: 25,
             spawning_interval: Duration::from_millis(200),
         };
@@ -722,6 +729,9 @@ mod doomclone_game {
     #[derive(Component)]
     struct MultipleSounds(Vec<AudioEmitter>);
 
+    #[derive(Component)]
+    struct Wavy(f32, f32);
+
     #[derive(bevy_ecs::event::Event)]
     struct GunFire;
 
@@ -762,6 +772,7 @@ mod doomclone_game {
 
     fn system_enemy_spawning(
         mut current_spawning_data: Local<WaveSpawningData>,
+        mut restart_reader: EventReader<Restart>,
         time: Res<Time>,
         wave_data: Res<AllWaveData>,
         app_state: Res<State<AppState>>,
@@ -771,6 +782,11 @@ mod doomclone_game {
         mut enemy_signal_writer: EventWriter<SpawnEnemy>,
         live_enemies: Query<Entity, With<Enemy>>,
     ) {
+        restart_reader.read().for_each(|_| {
+            current_spawning_data.number_of_spawned_enemies = 0;
+            current_spawning_data.spawn_cooldown = Timer::from_seconds(0.0, TimerMode::Once);
+        });
+
         let game_state = current_wave.get();
 
         let wave_data = &wave_data.0[game_state];
@@ -886,8 +902,9 @@ mod doomclone_game {
                         .expect("This index should be within the spawn point length")
                         .0;
 
-
-                    if (spawn_point - player_position.0).magnitude2() > exclusion_range * exclusion_range {
+                    if (spawn_point - player_position.0).magnitude2()
+                        > exclusion_range * exclusion_range
+                    {
                         break;
                     }
                 }
@@ -987,16 +1004,24 @@ mod doomclone_game {
         )>,
         player: Query<(&Position, &Rotation), (With<Player>, Without<Gun>)>,
     ) {
-        let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
-        let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
+        let movement_a = if button_input.is_key_down(Key::A) {
+            1
+        } else {
+            0
+        };
+        let movement_d = if button_input.is_key_down(Key::D) {
+            1
+        } else {
+            0
+        };
         let horizontal_movement = (movement_d - movement_a) as f32;
 
         const ROTATIONAL_SMOOTHING_X: f32 = 0.005;
         let smoothing_power = 1.0 - ROTATIONAL_SMOOTHING_X.powf(time.delta_seconds());
         let desired_rotation = -10.0 * horizontal_movement;
 
-        *gun_z_rotation = *gun_z_rotation * (1.0 - smoothing_power) +
-            desired_rotation * smoothing_power;
+        *gun_z_rotation =
+            *gun_z_rotation * (1.0 - smoothing_power) + desired_rotation * smoothing_power;
 
         let tilt: Quat = Quaternion::from(Euler {
             x: Deg(0.0),
@@ -1004,8 +1029,8 @@ mod doomclone_game {
             z: Deg(*gun_z_rotation),
         });
 
-        let resting_position: Vector3<f32> = tilt * cgmath::vec3(-0.575, -0.685, 1.23);
-        let reload_position: Vector3<f32> = tilt * cgmath::vec3(0.0, -2.334, 1.23);
+        let resting_position: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
+        let reload_position: Vector3<f32> = cgmath::vec3(0.0, -2.334, 1.23);
 
         const POSITIONAL_SMOOTHING: f32 = 0.05;
         const ROTATIONAL_SMOOTHING: f32 = 0.05;
@@ -1046,7 +1071,9 @@ mod doomclone_game {
                 cgmath::Quaternion::slerp(relative_rotation.0, desired_rotation, smoothing_power);
 
             for (player_position, player_rotation) in player.iter() {
-                position.0 = player_rotation.0 * relative_position.0 + player_position.0;
+                position.0 = player_rotation.0 * relative_position.0
+                    + player_position.0
+                    + (time.elapsed_seconds() * 3.0).sin() * Vector3::new(0.0, 0.1, 0.0);
                 rotation.0 = player_rotation.0 * relative_rotation.0;
             }
         }
@@ -1154,6 +1181,7 @@ mod doomclone_game {
         mut graphics: ResMut<Graphics>,
         mut death_event_reader: EventReader<DeathEvent>,
         mut rebuild_command_writer: EventWriter<RebuildCommand>,
+        mut trauma: ResMut<Trauma>,
         entities_with_mesh: Query<
             (
                 Entity,
@@ -1200,6 +1228,7 @@ mod doomclone_game {
                         player_health.current_health += 1;
                     }
                     sfx.0[1].play(audio_manager.as_mut()).unwrap();
+                    trauma.0 += 0.4;
                 },
             );
         rebuild_command_writer.send(RebuildCommand);
@@ -1297,6 +1326,7 @@ mod doomclone_game {
         mut knockback_event_writer: EventWriter<KnockbackEvent>,
         mut enemies: Query<(Entity, &Position, &mut Velocity, &MovementSpeed, &Enemy)>,
         mut audio_manager: ResMut<AudioRuntimeManager>,
+        mut trauma: ResMut<Trauma>,
     ) {
         let (player_entity, player_position, iframe, mut sfx) = player.single_mut();
         for (enemy_entity, position, mut velocity, movement_speed, enemy) in enemies.iter_mut() {
@@ -1325,7 +1355,9 @@ mod doomclone_game {
                     player_entity,
                     direction_to_player.xz() * knockback_strength,
                 );
+                // play hit
                 sfx.0[0].play(audio_manager.as_mut()).unwrap();
+                trauma.0 = 1.0;
             }
         }
     }
@@ -1405,6 +1437,8 @@ mod doomclone_game {
 
     fn system_animate_camera(
         time: Res<Time>,
+        mut trauma: ResMut<Trauma>,
+        perlin: Local<Perlin>,
         button_input: Res<ButtonInput>,
         mut camera_z_rotation: Local<f32>,
         mut camera: Query<(&mut Position, &mut Rotation), With<Camera>>,
@@ -1413,28 +1447,65 @@ mod doomclone_game {
         if player.is_empty() || camera.is_empty() {
             return;
         }
+
         let (player_position, player_rotation) = player.single();
         let (mut camera_position, mut camera_rotation) = camera.single_mut();
 
-        let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
-        let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
+        let movement_a = if button_input.is_key_down(Key::A) {
+            1
+        } else {
+            0
+        };
+        let movement_d = if button_input.is_key_down(Key::D) {
+            1
+        } else {
+            0
+        };
         let horizontal_movement = (movement_d - movement_a) as f32;
 
         const ROTATIONAL_SMOOTHING: f32 = 0.005;
         let smoothing_power = 1.0 - ROTATIONAL_SMOOTHING.powf(time.delta_seconds());
-        let desired_rotation = 1.0 * horizontal_movement;
+        let desired_rotation = 0.5 * horizontal_movement;
 
-        *camera_z_rotation = *camera_z_rotation * (1.0 - smoothing_power) +
-            desired_rotation * smoothing_power;
+        *camera_z_rotation =
+            *camera_z_rotation * (1.0 - smoothing_power) + desired_rotation * smoothing_power;
 
-        let reload_rotation: Quat = Quaternion::from(Euler {
+        let tilt_rotation: Quat = Quaternion::from(Euler {
             x: Deg(0.0),
             y: Deg(0.0),
             z: Deg(*camera_z_rotation),
         });
 
+        trauma.0 = trauma.0 - time.delta_seconds() * 3.0;
+        if trauma.0 < 0.0 {
+            trauma.0 = 0.0;
+        }
+        if trauma.0 > 1.0 {
+            trauma.0 = 1.0;
+        }
+
+        let sample = time.elapsed_seconds_f64() * 50.0;
+
+        let noise_x = perlin.get([0.0, sample, 3.0]);
+        let noise_y = perlin.get([100.0, sample, 3.0]);
+        let noise_z = perlin.get([200.0, sample, 3.0]);
+
+        let shake_scale = Vector3::new(10.0, 10.0, 5.0);
+        let shake_intensity = trauma.0 * trauma.0;
+        let shake = Vector3::new(
+            noise_x as f32 * shake_scale.x,
+            noise_y as f32 * shake_scale.y,
+            noise_z as f32 * shake_scale.z,
+        ) * shake_intensity;
+
+        let shake_rotation: Quat = Quaternion::from(Euler {
+            x: Deg(shake.x),
+            y: Deg(shake.y),
+            z: Deg(shake.z),
+        });
+
         camera_position.0 = player_position.0;
-        camera_rotation.0 = player_rotation.0 * reload_rotation;
+        camera_rotation.0 = player_rotation.0 * tilt_rotation * shake_rotation;
     }
 
     fn spawn_gun(
@@ -1508,8 +1579,17 @@ mod doomclone_game {
         ));
     }
 
+    #[derive(Event)]
+    struct Restart;
+
     #[derive(Component)]
     struct RestartUI;
+
+    fn system_animate_wavy(time: Res<Time>, mut wavies: Query<(&mut Position, &Wavy)>) {
+        for (mut position, wavy) in wavies.iter_mut() {
+            position.0.y += (time.elapsed_seconds() * wavy.1).sin() * wavy.0 * time.delta_seconds();
+        }
+    }
 
     fn spawn_restart_ui(
         app_state: Res<State<AppState>>,
@@ -1541,6 +1621,7 @@ mod doomclone_game {
             LookAtPlayer,
             Health::new(1),
             mesh_rendering_bundle,
+            Wavy(0.2, 1.5),
         ));
 
         spawn_map(graphics, commands);
@@ -1550,6 +1631,7 @@ mod doomclone_game {
         mut app_state: ResMut<NextState<AppState>>,
         mut wave_state: ResMut<NextState<GameplayStage>>,
         mut death_event_reader: EventReader<DeathEvent>,
+        mut restart_writer: EventWriter<Restart>,
         query_restart_ui: Query<&RestartUI>,
     ) {
         let restart_hit = death_event_reader.read().any(|death_event| {
@@ -1559,8 +1641,11 @@ mod doomclone_game {
                 false
             }
         });
-        wave_state.set(GameplayStage::Wave1);
-        app_state.set(AppState::Gameplay);
+        if restart_hit {
+            restart_writer.send(Restart);
+            wave_state.set(GameplayStage::Wave1);
+            app_state.set(AppState::Gameplay);
+        }
     }
 
     fn spawn_music(mut audio_manager: ResMut<AudioRuntimeManager>, mut commands: Commands) {
@@ -1749,19 +1834,18 @@ mod doomclone_game {
     }
 
     fn spawn_spawn_points(mut commands: Commands) {
-        let spawn_points: Vec<Vector3<f32>> =
-            vec![
-                cgmath::vec3(-17.3, 2.0, 4.3),
-                cgmath::vec3(12.3, 2.0, 4.6),
-                cgmath::vec3(-2.0, 2.0, 0.0),
-                cgmath::vec3(17.7, 2.0, -34.5),
-                cgmath::vec3(1.2, 2.0, -33.9),
-                cgmath::vec3(7.2, 2.0, -53.9),
-                cgmath::vec3(-11.5, 2.0, -51.0),
-                cgmath::vec3(-18.65, 2.0, -38.0),
-                cgmath::vec3(2.4, 2.0, 5.4),
-                cgmath::vec3(-13.0, 2.0, 6.8),
-            ];
+        let spawn_points: Vec<Vector3<f32>> = vec![
+            cgmath::vec3(-17.3, 2.0, 4.3),
+            cgmath::vec3(12.3, 2.0, 4.6),
+            cgmath::vec3(-2.0, 2.0, 0.0),
+            cgmath::vec3(17.7, 2.0, -34.5),
+            cgmath::vec3(1.2, 2.0, -33.9),
+            cgmath::vec3(7.2, 2.0, -53.9),
+            cgmath::vec3(-11.5, 2.0, -51.0),
+            cgmath::vec3(-18.65, 2.0, -38.0),
+            cgmath::vec3(2.4, 2.0, 5.4),
+            cgmath::vec3(-13.0, 2.0, 6.8),
+        ];
 
         spawn_points.iter().for_each(|&point| {
             commands.spawn((Position(point), SpawnPoint::<Enemy>::new()));
