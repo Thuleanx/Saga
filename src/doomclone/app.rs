@@ -412,7 +412,7 @@ mod doomclone_game {
                         system_heal_player_to_full,
                     ),
                 )
-                // .add_systems(bevy_app::Startup, spawn_music)
+                .add_systems(bevy_app::Startup, spawn_music)
                 .add_systems(
                     bevy_app::Update,
                     (
@@ -448,6 +448,7 @@ mod doomclone_game {
                     (
                         system_recenter_player,
                         system_cleanup_everything,
+                        spawn_music.after(system_cleanup_everything),
                         spawn_restart_ui.after(system_cleanup_everything),
                     ),
                 )
@@ -496,47 +497,139 @@ mod doomclone_game {
     struct AllWaveData(HashMap<GameplayStage, WaveData>);
 
     fn populate_wave_data(app: &mut App) {
-        let enemy_templates = AllEnemyTemplates(vec![EnemyTemplate {
-            radius: 1.0,
-            damage_radius: 2.2,
-            movement_speed: 2.0,
-            scale: 4.0,
-            knockback_resistance: 1.0,
-            path_to_texture: std::env::current_dir()
-                .unwrap()
-                .join("assets")
-                .join("png")
-                .join("seaborn.png"),
-            max_health: 2,
-        }]);
+        let enemy_templates = AllEnemyTemplates(vec![
+            EnemyTemplate {
+                radius: 0.5,
+                damage_radius: 1.7,
+                movement_speed: 2.0,
+                scale: 4.0,
+                knockback_resistance: 1.0,
+                path_to_texture: std::env::current_dir()
+                    .unwrap()
+                    .join("assets")
+                    .join("png")
+                    .join("fleshling.png"),
+                max_health: 2,
+            },
+            EnemyTemplate {
+                radius: 1.0,
+                damage_radius: 2.2,
+                movement_speed: 1.0,
+                scale: 4.0,
+                knockback_resistance: 1.0,
+                path_to_texture: std::env::current_dir()
+                    .unwrap()
+                    .join("assets")
+                    .join("png")
+                    .join("gug.png"),
+                max_health: 5,
+            },
+            EnemyTemplate {
+                radius: 0.8,
+                damage_radius: 2.0,
+                movement_speed: 0.5,
+                scale: 4.0,
+                knockback_resistance: 1.0,
+                path_to_texture: std::env::current_dir()
+                    .unwrap()
+                    .join("assets")
+                    .join("png")
+                    .join("owlcat.png"),
+                max_health: 8,
+            },
+            EnemyTemplate {
+                radius: 1.0,
+                damage_radius: 2.2,
+                movement_speed: 4.0,
+                scale: 4.0,
+                knockback_resistance: 1.0,
+                path_to_texture: std::env::current_dir()
+                    .unwrap()
+                    .join("assets")
+                    .join("png")
+                    .join("butterfly.png"),
+                max_health: 1,
+            },
+            EnemyTemplate {
+                radius: 0.5,
+                damage_radius: 1.7,
+                movement_speed: 3.0,
+                scale: 4.0,
+                knockback_resistance: 1.0,
+                path_to_texture: std::env::current_dir()
+                    .unwrap()
+                    .join("assets")
+                    .join("png")
+                    .join("akunohana.png"),
+                max_health: 3,
+            },
+        ]);
 
         let wavedata_0 = WaveData {
-            data: vec![EnemyWaveData {
-                enemy_id: 0,
-                weight: 1.0,
-            }],
-            enemy_count: 2,
-            enemy_cap: 1,
+            data: vec![
+                EnemyWaveData {
+                    enemy_id: 0,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 1,
+                    weight: 0.5,
+                }
+            ],
+            enemy_count: 20,
+            enemy_cap: 5,
             spawning_interval: Duration::from_millis(5000),
         };
 
         let wavedata_1 = WaveData {
-            data: vec![EnemyWaveData {
-                enemy_id: 0,
-                weight: 1.0,
-            }],
-            enemy_count: 2,
-            enemy_cap: 1,
+            data: vec![
+                EnemyWaveData {
+                    enemy_id: 0,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 1,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 2,
+                    weight: 0.5,
+                },
+                EnemyWaveData {
+                    enemy_id: 3,
+                    weight: 0.5,
+                },
+            ],
+            enemy_count: 25,
+            enemy_cap: 10,
             spawning_interval: Duration::from_millis(2000),
         };
 
         let wavedata_2 = WaveData {
-            data: vec![EnemyWaveData {
-                enemy_id: 0,
-                weight: 1.0,
-            }],
-            enemy_count: 2,
-            enemy_cap: 1,
+            data: vec![
+                EnemyWaveData {
+                    enemy_id: 0,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 1,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 2,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 3,
+                    weight: 1.0,
+                },
+                EnemyWaveData {
+                    enemy_id: 4,
+                    weight: 1.0,
+                },
+            ],
+            enemy_count: 30,
+            enemy_cap: 15,
             spawning_interval: Duration::from_millis(1000),
         };
 
@@ -692,7 +785,9 @@ mod doomclone_game {
             return;
         }
 
-        current_spawning_data.spawn_cooldown.tick(time.delta());
+        if !overcrowded {
+            current_spawning_data.spawn_cooldown.tick(time.delta());
+        }
         let should_spawn = current_spawning_data.spawn_cooldown.finished()
             && !is_finished_with_spawning
             && !overcrowded;
@@ -724,6 +819,36 @@ mod doomclone_game {
                 Timer::new(wave_data.spawning_interval, TimerMode::Once);
             current_spawning_data.number_of_spawned_enemies += 1;
         }
+    }
+
+    fn spawn_blood_pool(
+        graphics: &mut ResMut<Graphics>,
+        commands: &mut Commands,
+        mut location: Vector3<f32>,
+    ) {
+        let cpu_mesh = CPUMesh::get_simple_plane();
+
+        let path_to_texture = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("png")
+            .join("blood.png");
+
+        let (mesh_rendering_bundle, _) =
+            construct_mesh_with_cpu_mesh(graphics, &path_to_texture, cpu_mesh).unwrap();
+
+        location.y = 0.01;
+        let rotation = Quaternion::from(Euler {
+            x: Deg(50.0),
+            y: Deg(180.0),
+            z: Deg(0.0),
+        });
+
+        commands.spawn((
+            Position(location),
+            Rotation(rotation),
+            mesh_rendering_bundle,
+        ));
     }
 
     fn system_spawn_enemy_by_id(
@@ -782,6 +907,9 @@ mod doomclone_game {
         }
     }
 
+    #[derive(Component)]
+    struct Music;
+
     // only player and gun survives any transition
     fn system_cleanup_everything(
         graphics: Res<Graphics>,
@@ -792,7 +920,7 @@ mod doomclone_game {
                 Option<&MainTexture>,
                 Option<&MeshRenderingInfo>,
             ),
-            (Without<Player>, Without<Gun>, Without<Camera>),
+            (Without<Player>, Without<Gun>, Without<Camera>, Without<Music>),
         >,
         mut rebuild_command_writer: EventWriter<RebuildCommand>,
         mut commands: Commands,
@@ -983,6 +1111,7 @@ mod doomclone_game {
         entities_with_mesh: Query<
             (
                 Entity,
+                &Position,
                 Option<&Mesh>,
                 Option<&MainTexture>,
                 Option<&MeshRenderingInfo>,
@@ -1001,8 +1130,8 @@ mod doomclone_game {
         }
         entities_with_mesh
             .iter()
-            .filter(|(entity, _, _, _)| all_dead_targets.contains(entity))
-            .for_each(|(entity, mesh, main_texture, mesh_rendering_info)| {
+            .filter(|(entity, _, _, _, _)| all_dead_targets.contains(entity))
+            .for_each(|(entity, position, mesh, main_texture, mesh_rendering_info)| {
                 if let (Some(mesh), Some(main_texture), Some(mesh_rendering_info)) =
                     (mesh, main_texture, mesh_rendering_info)
                 {
@@ -1269,7 +1398,12 @@ mod doomclone_game {
             .unwrap()
             .join("assets")
             .join("png")
-            .join("seaborn.png");
+            .join(
+                match app_state.get() {
+                    AppState::Gameplay => "win.png",
+                    AppState::Win => "win.png",
+                    AppState::Loss =>"loss.png",
+                });
 
         let cpu_mesh = CPUMesh::get_simple_plane();
 
@@ -1320,7 +1454,7 @@ mod doomclone_game {
         let audio_emitter =
             AudioEmitter::new(audio_manager.as_mut(), path_to_music, true, sound_setting).unwrap();
 
-        let spawn = commands.spawn(audio_emitter);
+        let spawn = commands.spawn((audio_emitter, Music));
     }
 
     fn spawn_map(mut graphics: ResMut<Graphics>, mut commands: Commands) {
