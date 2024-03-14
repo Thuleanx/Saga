@@ -575,8 +575,8 @@ mod doomclone_game {
                     weight: 0.5,
                 },
             ],
-            enemy_count: 30,
-            enemy_cap: 20,
+            enemy_count: 20,
+            enemy_cap: 15,
             spawning_interval: Duration::from_millis(500),
         };
 
@@ -599,8 +599,8 @@ mod doomclone_game {
                     weight: 1.5,
                 },
             ],
-            enemy_count: 45,
-            enemy_cap: 30,
+            enemy_count: 35,
+            enemy_cap: 20,
             spawning_interval: Duration::from_millis(200),
         };
 
@@ -624,11 +624,11 @@ mod doomclone_game {
                 },
                 EnemyWaveData {
                     enemy_id: 4,
-                    weight: 0.2,
+                    weight: 0.3,
                 },
             ],
-            enemy_count: 60,
-            enemy_cap: 20,
+            enemy_count: 50,
+            enemy_cap: 25,
             spawning_interval: Duration::from_millis(200),
         };
 
@@ -976,6 +976,8 @@ mod doomclone_game {
     fn animate_gun(
         mut is_not_first_frame: Local<bool>,
         time: Res<Time>,
+        button_input: Res<ButtonInput>,
+        mut gun_z_rotation: Local<f32>,
         mut gun: Query<(
             &mut Position,
             &mut RelativePosition,
@@ -985,25 +987,42 @@ mod doomclone_game {
         )>,
         player: Query<(&Position, &Rotation), (With<Player>, Without<Gun>)>,
     ) {
-        const RESTING_POSITION: Vector3<f32> = cgmath::vec3(-0.575, -0.685, 1.23);
-        const RELOAD_POSITION: Vector3<f32> = cgmath::vec3(0.0, -2.334, 1.23);
+        let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
+        let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
+        let horizontal_movement = (movement_d - movement_a) as f32;
+
+        const ROTATIONAL_SMOOTHING_X: f32 = 0.005;
+        let smoothing_power = 1.0 - ROTATIONAL_SMOOTHING_X.powf(time.delta_seconds());
+        let desired_rotation = -10.0 * horizontal_movement;
+
+        *gun_z_rotation = *gun_z_rotation * (1.0 - smoothing_power) +
+            desired_rotation * smoothing_power;
+
+        let tilt: Quat = Quaternion::from(Euler {
+            x: Deg(0.0),
+            y: Deg(0.0),
+            z: Deg(*gun_z_rotation),
+        });
+
+        let resting_position: Vector3<f32> = tilt * cgmath::vec3(-0.575, -0.685, 1.23);
+        let reload_position: Vector3<f32> = tilt * cgmath::vec3(0.0, -2.334, 1.23);
 
         const POSITIONAL_SMOOTHING: f32 = 0.05;
-         const ROTATIONAL_SMOOTHING: f32 = 0.05;
+        const ROTATIONAL_SMOOTHING: f32 = 0.05;
 
         let resting_rotation: Quat =
-            Quaternion::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg(180.0));
+            Quaternion::from_axis_angle(cgmath::vec3(0.0, 1.0, 0.0), Deg(180.0)) * tilt;
         let reload_rotation: Quat = Quaternion::from(Euler {
             x: Deg(50.0),
             y: Deg(180.0),
             z: Deg(0.0),
-        });
+        }) * tilt;
 
         if is_not_first_frame.not() {
             *is_not_first_frame = true;
 
             for (_, mut relative_position, _, mut relative_rotation, _) in gun.iter_mut() {
-                relative_position.0 = RESTING_POSITION;
+                relative_position.0 = resting_position;
                 relative_rotation.0 = resting_rotation;
             }
         }
@@ -1013,9 +1032,9 @@ mod doomclone_game {
         {
             let (desired_position, desired_rotation) =
                 if matches!(gun.gun_state, GunState::Reloading { .. }) {
-                    (RELOAD_POSITION, reload_rotation)
+                    (reload_position, reload_rotation)
                 } else {
-                    (RESTING_POSITION, resting_rotation)
+                    (resting_position, resting_rotation)
                 };
 
             let smoothing_power = 1.0 - POSITIONAL_SMOOTHING.powf(time.delta_seconds());
@@ -1399,12 +1418,11 @@ mod doomclone_game {
 
         let movement_a = if button_input.is_key_down(Key::A) {1} else {0};
         let movement_d = if button_input.is_key_down(Key::D) {1} else {0};
-
         let horizontal_movement = (movement_d - movement_a) as f32;
 
         const ROTATIONAL_SMOOTHING: f32 = 0.005;
         let smoothing_power = 1.0 - ROTATIONAL_SMOOTHING.powf(time.delta_seconds());
-        let desired_rotation = 2.0 * horizontal_movement;
+        let desired_rotation = 1.0 * horizontal_movement;
 
         *camera_z_rotation = *camera_z_rotation * (1.0 - smoothing_power) +
             desired_rotation * smoothing_power;
