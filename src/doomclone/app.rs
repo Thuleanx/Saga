@@ -416,13 +416,13 @@ mod doomclone_game {
                 .add_systems(
                     bevy_app::Update,
                     (
-                        system_enemy_spawning
-                            .in_set(GameplaySet)
-                            .run_if(in_state(AppState::Gameplay)),
-                        system_spawn_enemy_by_id
-                            .run_if(in_state(AppState::Gameplay))
-                            .run_if(on_event::<SpawnEnemy>())
-                            .after(system_enemy_spawning),
+                        // system_enemy_spawning
+                        //     .in_set(GameplaySet)
+                        //     .run_if(in_state(AppState::Gameplay)),
+                        // system_spawn_enemy_by_id
+                        //     .run_if(in_state(AppState::Gameplay))
+                        //     .run_if(on_event::<SpawnEnemy>())
+                        //     .after(system_enemy_spawning),
                         system_flash_on_damage,
                         animate_gun_shot,
                         animate_look_at_player,
@@ -448,7 +448,6 @@ mod doomclone_game {
                     (
                         system_recenter_player,
                         system_cleanup_everything,
-                        spawn_music.after(system_cleanup_everything),
                         spawn_restart_ui.after(system_cleanup_everything),
                     ),
                 )
@@ -574,7 +573,7 @@ mod doomclone_game {
                 EnemyWaveData {
                     enemy_id: 1,
                     weight: 0.5,
-                }
+                },
             ],
             enemy_count: 20,
             enemy_cap: 5,
@@ -720,6 +719,9 @@ mod doomclone_game {
         }
     }
 
+    #[derive(Component)]
+    struct MultipleSounds(Vec<AudioEmitter>);
+
     #[derive(bevy_ecs::event::Event)]
     struct GunFire;
 
@@ -748,7 +750,11 @@ mod doomclone_game {
         log::trace!("Player recentered ");
         let (mut position, mut rotation) = player.single_mut();
         position.0 = Vector3::new(0.0, 2.0, 0.0);
-        rotation.0 = Quaternion::one();
+        rotation.0 = Quaternion::from(Euler {
+            x: Deg(0.0),
+            y: Deg(180.0),
+            z: Deg(0.0),
+        });
     }
 
     #[derive(Event)]
@@ -837,16 +843,17 @@ mod doomclone_game {
         let (mesh_rendering_bundle, _) =
             construct_mesh_with_cpu_mesh(graphics, &path_to_texture, cpu_mesh).unwrap();
 
-        location.y = 0.01;
+        location.y = rand::thread_rng().gen_range(0.00001..0.0001) - 0.2;
         let rotation = Quaternion::from(Euler {
-            x: Deg(50.0),
-            y: Deg(180.0),
-            z: Deg(0.0),
+            x: Deg(-90.0),
+            y: Deg(0.0),
+            z: Deg(rand::thread_rng().gen_range(0.0..180.0)),
         });
 
         commands.spawn((
             Position(location),
             Rotation(rotation),
+            Scale(Vector3::from_value(4.0)),
             mesh_rendering_bundle,
         ));
     }
@@ -920,7 +927,12 @@ mod doomclone_game {
                 Option<&MainTexture>,
                 Option<&MeshRenderingInfo>,
             ),
-            (Without<Player>, Without<Gun>, Without<Camera>, Without<Music>),
+            (
+                Without<Player>,
+                Without<Gun>,
+                Without<Camera>,
+                Without<Music>,
+            ),
         >,
         mut rebuild_command_writer: EventWriter<RebuildCommand>,
         mut commands: Commands,
@@ -1105,7 +1117,7 @@ mod doomclone_game {
     }
 
     fn on_entity_death(
-        graphics: Res<Graphics>,
+        mut graphics: ResMut<Graphics>,
         mut death_event_reader: EventReader<DeathEvent>,
         mut rebuild_command_writer: EventWriter<RebuildCommand>,
         entities_with_mesh: Query<
@@ -1118,7 +1130,9 @@ mod doomclone_game {
             ),
             Without<Player>,
         >,
+        mut player: Query<(&mut Health, &mut MultipleSounds), With<Player>>,
         mut commands: Commands,
+        mut audio_manager: ResMut<AudioRuntimeManager>,
     ) {
         log::trace!("Cleaning up dead target");
         let all_dead_targets: HashSet<Entity> = death_event_reader
@@ -1131,19 +1145,29 @@ mod doomclone_game {
         entities_with_mesh
             .iter()
             .filter(|(entity, _, _, _, _)| all_dead_targets.contains(entity))
-            .for_each(|(entity, position, mesh, main_texture, mesh_rendering_info)| {
-                if let (Some(mesh), Some(main_texture), Some(mesh_rendering_info)) =
-                    (mesh, main_texture, mesh_rendering_info)
-                {
-                    saga_renderer::remove_mesh(
-                        graphics.as_ref(),
-                        mesh,
-                        main_texture,
-                        mesh_rendering_info,
-                    );
-                }
-                commands.entity(entity).despawn();
-            });
+            .for_each(
+                |(entity, position, mesh, main_texture, mesh_rendering_info)| {
+                    if let (Some(mesh), Some(main_texture), Some(mesh_rendering_info)) =
+                        (mesh, main_texture, mesh_rendering_info)
+                    {
+                        saga_renderer::remove_mesh(
+                            graphics.as_ref(),
+                            mesh,
+                            main_texture,
+                            mesh_rendering_info,
+                        );
+                    }
+                    commands.entity(entity).despawn();
+                    spawn_blood_pool(&mut graphics, &mut commands, position.0);
+                    let (mut player_health, mut sfx) = player.single_mut();
+                    let player_full_heatlh =
+                        player_health.current_health == player_health.max_health;
+                    if !player_full_heatlh {
+                        player_health.current_health += 1;
+                    }
+                    sfx.0[1].play(audio_manager.as_mut()).unwrap();
+                },
+            );
         rebuild_command_writer.send(RebuildCommand);
     }
 
@@ -1151,14 +1175,15 @@ mod doomclone_game {
         mut mouse_button_events: EventReader<MouseButtonEvent>,
         mut player_fire_event: EventWriter<GunFire>,
         mut player_reload_event: EventWriter<GunReload>,
-        mut gun: Query<&mut Gun>,
+        mut gun: Query<(&mut Gun, &mut MultipleSounds)>,
+        mut audio_manager: ResMut<AudioRuntimeManager>,
     ) {
         let left_mouse_pressed = mouse_button_events.read().any(|button_event| {
             let MouseButtonEvent { button, state } = button_event;
             (*button, *state) == (MouseButton::Left, ElementState::Pressed)
         });
 
-        let mut gun = gun.single_mut();
+        let (mut gun, mut sfx) = gun.single_mut();
         let ready_to_fire = matches!(gun.gun_state, GunState::ReadyToFire);
         if !left_mouse_pressed || !ready_to_fire {
             return;
@@ -1169,6 +1194,8 @@ mod doomclone_game {
         if has_bullet_left {
             player_fire_event.send(GunFire);
             gun.number_of_loaded_bullets -= 1;
+            // play shoot
+            sfx.0[0].play(audio_manager.as_mut()).unwrap();
         } else {
             // & !has_bullet_left
             player_reload_event.send(GunReload);
@@ -1180,10 +1207,12 @@ mod doomclone_game {
                 timer: Timer::new(gun.firing_cooldown, TimerMode::Once),
             }
         } else {
+            // play reload
+            sfx.0[1].play(audio_manager.as_mut()).unwrap();
             GunState::Reloading {
                 timer: Timer::new(gun.reload_duration, TimerMode::Once),
             }
-        }
+        };
     }
 
     fn system_gun_update(time: Res<Time>, mut guns: Query<&mut Gun>) {
@@ -1229,12 +1258,13 @@ mod doomclone_game {
     }
 
     fn system_enemy_ai(
-        player: Query<(Entity, &Position, Option<&IFrame>), With<Player>>,
+        mut player: Query<(Entity, &Position, Option<&IFrame>, &mut MultipleSounds), With<Player>>,
         mut damage_event_writer: EventWriter<DamageEvent>,
         mut knockback_event_writer: EventWriter<KnockbackEvent>,
         mut enemies: Query<(Entity, &Position, &mut Velocity, &MovementSpeed, &Enemy)>,
+        mut audio_manager: ResMut<AudioRuntimeManager>,
     ) {
-        let (player_entity, player_position, iframe) = player.single();
+        let (player_entity, player_position, iframe, mut sfx) = player.single_mut();
         for (enemy_entity, position, mut velocity, movement_speed, enemy) in enemies.iter_mut() {
             let displacement_to_player = player_position.0 - position.0;
             let direction_to_player = if displacement_to_player.magnitude2() == 0.0 {
@@ -1261,6 +1291,7 @@ mod doomclone_game {
                     player_entity,
                     direction_to_player.xz() * knockback_strength,
                 );
+                sfx.0[0].play(audio_manager.as_mut()).unwrap();
             }
         }
     }
@@ -1352,7 +1383,11 @@ mod doomclone_game {
         camera_rotation.0 = player_rotation.0;
     }
 
-    fn spawn_gun(mut graphics: ResMut<Graphics>, mut commands: Commands) {
+    fn spawn_gun(
+        mut graphics: ResMut<Graphics>,
+        mut commands: Commands,
+        mut audio_manager: ResMut<AudioRuntimeManager>,
+    ) {
         let path_to_obj = std::env::current_dir()
             .unwrap()
             .join("assets")
@@ -1370,17 +1405,51 @@ mod doomclone_game {
         let position = cgmath::vec3(0.0, 0.0, 0.0);
         let rotation = Quat::one();
 
+        let path_to_shoot_sfx = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("audio")
+            .join("sfx")
+            .join("shot.wav");
+
+        let sound_setting = StaticSoundSettings::default().volume(0.5);
+        let shoot_audio_emitter = AudioEmitter::new(
+            audio_manager.as_mut(),
+            path_to_shoot_sfx,
+            false,
+            sound_setting,
+        )
+        .unwrap();
+
+        let path_to_reload_sfx = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("audio")
+            .join("sfx")
+            .join("reload.mp3");
+
+        let sound_setting = StaticSoundSettings::default();
+
+        let reload_audio_emitter = AudioEmitter::new(
+            audio_manager.as_mut(),
+            path_to_reload_sfx,
+            false,
+            sound_setting,
+        )
+        .unwrap();
+
         let spawn = commands.spawn((
             Gun::new(
                 4,
                 1.0,
                 Duration::from_millis(200),
-                Duration::from_millis(1000),
+                Duration::from_millis(727),
             ),
             Position(position),
             Rotation(rotation),
             RelativePosition(position),
             RelativeRotation(rotation),
+            MultipleSounds(vec![shoot_audio_emitter, reload_audio_emitter]),
             mesh_rendering_bundle,
         ));
     }
@@ -1398,12 +1467,11 @@ mod doomclone_game {
             .unwrap()
             .join("assets")
             .join("png")
-            .join(
-                match app_state.get() {
-                    AppState::Gameplay => "win.png",
-                    AppState::Win => "win.png",
-                    AppState::Loss =>"loss.png",
-                });
+            .join(match app_state.get() {
+                AppState::Gameplay => "win.png",
+                AppState::Win => "win.png",
+                AppState::Loss => "loss.png",
+            });
 
         let cpu_mesh = CPUMesh::get_simple_plane();
 
@@ -1516,13 +1584,47 @@ mod doomclone_game {
         ));
     }
 
-    fn spawn_player(mut commands: Commands) {
+    fn spawn_player(mut commands: Commands, mut audio_manager: ResMut<AudioRuntimeManager>) {
         let position = Position(cgmath::vec3(0.0, 2.0, -4.0));
         let rotation = Rotation(Quat::one());
         let turn_speed = TurnSpeed(cgmath::vec2(
             cgmath::Rad(1.0 / 100.0),
             cgmath::Rad(1.0 / 100.0),
         ));
+
+        let path_to_hurt_sfx = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("audio")
+            .join("sfx")
+            .join("hurt.wav");
+
+        let sound_setting = StaticSoundSettings::default();
+
+        let hurt_audio_emitter = AudioEmitter::new(
+            audio_manager.as_mut(),
+            path_to_hurt_sfx,
+            false,
+            sound_setting,
+        )
+        .unwrap();
+
+        let path_to_kill_sfx = std::env::current_dir()
+            .unwrap()
+            .join("assets")
+            .join("audio")
+            .join("sfx")
+            .join("kill.wav");
+
+        let sound_setting = StaticSoundSettings::default().playback_rate(2.0);
+
+        let kill_audio_emitter = AudioEmitter::new(
+            audio_manager.as_mut(),
+            path_to_kill_sfx,
+            false,
+            sound_setting,
+        )
+        .unwrap();
 
         let spawn = commands.spawn((
             Player,
@@ -1536,6 +1638,7 @@ mod doomclone_game {
             Velocity(Vector2::zero()),
             Knockbackable::new(1.0),
             IFrame::new(Duration::from_millis(1000)),
+            MultipleSounds(vec![hurt_audio_emitter, kill_audio_emitter]),
         ));
     }
 
@@ -1593,7 +1696,18 @@ mod doomclone_game {
 
     fn spawn_spawn_points(mut commands: Commands) {
         let spawn_points: Vec<Vector3<f32>> =
-            vec![cgmath::vec3(0.0, 2.0, 8.0), cgmath::vec3(0.0, 2.0, -8.0)];
+            vec![
+                cgmath::vec3(-17.3, 2.0, 4.3),
+                cgmath::vec3(12.3, 2.0, 4.6),
+                cgmath::vec3(-2.0, 2.0, 0.0),
+                cgmath::vec3(17.7, 2.0, -34.5),
+                cgmath::vec3(1.2, 2.0, -33.9),
+                cgmath::vec3(7.2, 2.0, -53.9),
+                cgmath::vec3(-11.5, 2.0, -51.0),
+                cgmath::vec3(-18.65, 2.0, -38.0),
+                cgmath::vec3(2.4, 2.0, 5.4),
+                cgmath::vec3(-13.0, 2.0, 6.8),
+            ];
 
         spawn_points.iter().for_each(|&point| {
             commands.spawn((Position(point), SpawnPoint::<Enemy>::new()));
@@ -3217,13 +3331,14 @@ mod saga_audio {
 
         pub fn play(&mut self, audio_runtime_manager: &mut AudioRuntimeManager) -> Result<()> {
             if let Some(_) = self.sound_handler {
-            } else {
-                let event_instance = audio_runtime_manager
-                    .audio_manager
-                    .play(self.sound_data.clone())?;
-
-                self.sound_handler = Some(event_instance);
+                self.stop(audio_runtime_manager)?;
             }
+
+            let event_instance = audio_runtime_manager
+                .audio_manager
+                .play(self.sound_data.clone())?;
+
+            self.sound_handler = Some(event_instance);
             Ok(())
         }
 
