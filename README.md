@@ -42,8 +42,8 @@ List of things to do on last day
 - [x] Enemy damage playersssss
 - [x] Enemy spawnessses
 - [ ] Blender make room
-- [ ] End game room (shoot target to reload)
-- [ ] Death
+- [x] End game room (shoot target to reload)
+- [x] Death
 - [ ] Dash ability
 
 Technical improvements

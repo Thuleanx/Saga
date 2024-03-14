@@ -358,7 +358,7 @@ mod doomclone_game {
     use bevy_ecs::{
         component::Component,
         entity::Entity,
-        event::{EventReader, EventWriter},
+        event::{Event, EventReader, EventWriter},
         query::{Changed, With, Without},
         schedule::{
             common_conditions::{in_state, on_event},
@@ -371,6 +371,7 @@ mod doomclone_game {
         Array, Deg, Euler, InnerSpace, One, Quaternion, Rad, Rotation as _, Rotation3, Vector2,
         Vector3, Vector4, Zero,
     };
+    use itertools::Itertools;
     use kira::sound::static_sound::StaticSoundSettings;
     use rand::Rng;
     use winit::event::{ElementState, MouseButton, VirtualKeyCode as Key};
@@ -406,7 +407,6 @@ mod doomclone_game {
                     (
                         system_cleanup_everything,
                         spawn_map.after(system_cleanup_everything),
-                        spawn_enemy.after(system_cleanup_everything),
                         spawn_spawn_points.after(system_cleanup_everything),
                         system_recenter_player,
                         system_heal_player_to_full,
@@ -416,9 +416,13 @@ mod doomclone_game {
                 .add_systems(
                     bevy_app::Update,
                     (
-                        spawn_enemy_on_interval
+                        system_enemy_spawning
                             .in_set(GameplaySet)
                             .run_if(in_state(AppState::Gameplay)),
+                        system_spawn_enemy_by_id
+                            .run_if(in_state(AppState::Gameplay))
+                            .run_if(on_event::<SpawnEnemy>())
+                            .after(system_enemy_spawning),
                         system_flash_on_damage,
                         animate_gun_shot,
                         animate_look_at_player,
@@ -449,6 +453,7 @@ mod doomclone_game {
                 )
                 .add_systems(bevy_app::PostUpdate, animate_gun)
                 .add_event::<GunFire>()
+                .add_event::<SpawnEnemy>()
                 .add_event::<GunReload>();
 
             app.insert_state(AppState::Gameplay);
@@ -460,6 +465,7 @@ mod doomclone_game {
         radius: f32,
         damage_radius: f32,
         movement_speed: f32,
+        max_health: u32,
         scale: f32,
         knockback_resistance: f32,
         path_to_texture: PathBuf,
@@ -475,9 +481,15 @@ mod doomclone_game {
 
     struct WaveData {
         data: Vec<EnemyWaveData>,
-        batch_spawn_at_start: u32,
-        number_of_remaining_enemies: u32,
+        enemy_count: u32,
+        enemy_cap: u32,
         spawning_interval: Duration,
+    }
+
+    #[derive(Default)]
+    struct WaveSpawningData {
+        number_of_spawned_enemies: u32,
+        spawn_cooldown: Timer,
     }
 
     #[derive(Resource)]
@@ -486,7 +498,7 @@ mod doomclone_game {
     fn populate_wave_data(app: &mut App) {
         let enemy_templates = AllEnemyTemplates(vec![EnemyTemplate {
             radius: 1.0,
-            damage_radius: 2.1,
+            damage_radius: 2.2,
             movement_speed: 2.0,
             scale: 4.0,
             knockback_resistance: 1.0,
@@ -495,19 +507,43 @@ mod doomclone_game {
                 .join("assets")
                 .join("png")
                 .join("seaborn.png"),
+            max_health: 2,
         }]);
+
         let wavedata_0 = WaveData {
             data: vec![EnemyWaveData {
                 enemy_id: 0,
                 weight: 1.0,
             }],
-            batch_spawn_at_start: 10,
-            number_of_remaining_enemies: 20,
+            enemy_count: 2,
+            enemy_cap: 1,
             spawning_interval: Duration::from_millis(5000),
+        };
+
+        let wavedata_1 = WaveData {
+            data: vec![EnemyWaveData {
+                enemy_id: 0,
+                weight: 1.0,
+            }],
+            enemy_count: 2,
+            enemy_cap: 1,
+            spawning_interval: Duration::from_millis(2000),
+        };
+
+        let wavedata_2 = WaveData {
+            data: vec![EnemyWaveData {
+                enemy_id: 0,
+                weight: 1.0,
+            }],
+            enemy_count: 2,
+            enemy_cap: 1,
+            spawning_interval: Duration::from_millis(1000),
         };
 
         let mut wave_datas = HashMap::new();
         wave_datas.insert(GameplayStage::Wave1, wavedata_0);
+        wave_datas.insert(GameplayStage::Wave2, wavedata_1);
+        wave_datas.insert(GameplayStage::Wave3, wavedata_2);
 
         app.insert_resource(enemy_templates);
         app.insert_resource(AllWaveData(wave_datas));
@@ -620,6 +656,124 @@ mod doomclone_game {
         let (mut position, mut rotation) = player.single_mut();
         position.0 = Vector3::new(0.0, 2.0, 0.0);
         rotation.0 = Quaternion::one();
+    }
+
+    #[derive(Event)]
+    struct SpawnEnemy(u32);
+
+    fn system_enemy_spawning(
+        mut current_spawning_data: Local<WaveSpawningData>,
+        time: Res<Time>,
+        wave_data: Res<AllWaveData>,
+        app_state: Res<State<AppState>>,
+        current_wave: Res<State<GameplayStage>>,
+        mut next_wave: ResMut<NextState<GameplayStage>>,
+        mut next_app_state: ResMut<NextState<AppState>>,
+        mut enemy_signal_writer: EventWriter<SpawnEnemy>,
+        live_enemies: Query<Entity, With<Enemy>>,
+    ) {
+        let game_state = current_wave.get();
+
+        let wave_data = &wave_data.0[game_state];
+
+        let is_finished_with_spawning =
+            current_spawning_data.number_of_spawned_enemies == wave_data.enemy_count;
+        let number_of_enemies_alive = live_enemies.iter().count();
+        let overcrowded = number_of_enemies_alive as u32 >= wave_data.enemy_cap;
+
+        if is_finished_with_spawning && number_of_enemies_alive == 0 {
+            current_spawning_data.number_of_spawned_enemies = 0;
+            current_spawning_data.spawn_cooldown = Timer::from_seconds(0.0, TimerMode::Once);
+            match game_state {
+                GameplayStage::Wave1 => next_wave.set(GameplayStage::Wave2),
+                GameplayStage::Wave2 => next_wave.set(GameplayStage::Wave3),
+                GameplayStage::Wave3 => next_app_state.set(AppState::Win),
+            }
+            return;
+        }
+
+        current_spawning_data.spawn_cooldown.tick(time.delta());
+        let should_spawn = current_spawning_data.spawn_cooldown.finished()
+            && !is_finished_with_spawning
+            && !overcrowded;
+        if should_spawn {
+            // Spawning
+            let total_weight = wave_data
+                .data
+                .iter()
+                .fold(0.0, |sum, enemy| sum + enemy.weight);
+
+            if total_weight == 0.0 {
+                return;
+            }
+
+            let mut chosen_value = rand::thread_rng().gen_range(0.0..total_weight);
+
+            let enemy_id = wave_data
+                .data
+                .iter()
+                .find_or_last(|enemy| {
+                    chosen_value -= enemy.weight;
+                    chosen_value <= 0.0
+                })
+                .unwrap()
+                .enemy_id;
+
+            enemy_signal_writer.send(SpawnEnemy(enemy_id));
+            current_spawning_data.spawn_cooldown =
+                Timer::new(wave_data.spawning_interval, TimerMode::Once);
+            current_spawning_data.number_of_spawned_enemies += 1;
+        }
+    }
+
+    fn system_spawn_enemy_by_id(
+        mut enemy_spawn_commands: EventReader<SpawnEnemy>,
+        mut graphics: ResMut<Graphics>,
+        mut commands: Commands,
+        enemy_templates: Res<AllEnemyTemplates>,
+        spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
+    ) {
+        let total_spawn_points = spawn_points.iter().len();
+
+        for spawn_enemy_command in enemy_spawn_commands.read() {
+            let cpu_mesh = CPUMesh::get_simple_plane();
+            let spawn_point = if total_spawn_points == 0 {
+                cgmath::vec3(0.0, 2.0, 0.0)
+            } else {
+                let index = rand::thread_rng().gen_range(0..total_spawn_points);
+                spawn_points
+                    .iter()
+                    .nth(index)
+                    .expect("This index should be within the spawn point length")
+                    .0
+            };
+
+            let template = &enemy_templates.0[spawn_enemy_command.0 as usize];
+
+            let (mesh_rendering_bundle, _) =
+                construct_mesh_with_cpu_mesh(&mut graphics, &template.path_to_texture, cpu_mesh)
+                    .unwrap();
+
+            commands.spawn((
+                Enemy {
+                    damage_radius: template.damage_radius,
+                },
+                Position(spawn_point),
+                Rotation(Quat::one()),
+                Scale(Vector3::from_value(template.scale)),
+                CircleCollider {
+                    radius: template.radius,
+                },
+                LookAtPlayer,
+                Movable,
+                Velocity(Vector2::zero()),
+                MovementSpeed(template.movement_speed),
+                Health::new(template.max_health),
+                FlashOnDamage::new(Duration::from_millis(100)),
+                Knockbackable::new(template.knockback_resistance),
+                mesh_rendering_bundle,
+            ));
+        }
     }
 
     fn system_heal_player_to_full(mut player: Query<&mut Health, With<Player>>) {
@@ -1102,68 +1256,6 @@ mod doomclone_game {
         ));
     }
 
-    fn spawn_enemy_on_interval(
-        time: Res<Time>,
-        mut is_not_first_frame: Local<bool>,
-        mut cooldown: Local<Timer>,
-        graphics: ResMut<Graphics>,
-        commands: Commands,
-        spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
-    ) {
-        if is_not_first_frame.not() {
-            *cooldown = Timer::from_seconds(4.0, TimerMode::Repeating);
-        }
-        *is_not_first_frame = true;
-
-        cooldown.tick(time.delta());
-
-        if cooldown.just_finished() {
-            log::trace!("Spawning");
-            spawn_enemy(graphics, commands, spawn_points);
-        }
-    }
-
-    fn spawn_enemy(
-        mut graphics: ResMut<Graphics>,
-        mut commands: Commands,
-        spawn_points: Query<&Position, With<SpawnPoint<Enemy>>>,
-    ) {
-        let path_to_texture = std::env::current_dir()
-            .unwrap()
-            .join("assets")
-            .join("png")
-            .join("seaborn.png");
-
-        let cpu_mesh = CPUMesh::get_simple_plane();
-
-        let (mesh_rendering_bundle, _) =
-            construct_mesh_with_cpu_mesh(&mut graphics, &path_to_texture, cpu_mesh).unwrap();
-
-        let total_spawn_points = spawn_points.iter().len();
-        let spawn_point = if total_spawn_points == 0 {
-            cgmath::vec3(0.0, 2.0, 0.0)
-        } else {
-            let index = rand::thread_rng().gen_range(0..total_spawn_points);
-            spawn_points.iter().nth(index).expect("This index should be within the spawn point length").0
-        };
-
-        let spawn = commands.spawn((
-            Enemy { damage_radius: 2.1 },
-            Position(spawn_point),
-            Rotation(Quat::one()),
-            Scale((4.0 as f32) * cgmath::vec3(1.0, 1.0, 1.0)),
-            CircleCollider { radius: 1.0 },
-            LookAtPlayer,
-            Movable,
-            Velocity(Vector2::zero()),
-            MovementSpeed(2.0),
-            Health::new(10),
-            FlashOnDamage::new(Duration::from_millis(100)),
-            Knockbackable::new(1.0),
-            mesh_rendering_bundle,
-        ));
-    }
-
     #[derive(Component)]
     struct RestartUI;
 
@@ -1366,10 +1458,8 @@ mod doomclone_game {
     }
 
     fn spawn_spawn_points(mut commands: Commands) {
-        let spawn_points: Vec<Vector3<f32>> = vec![
-            cgmath::vec3(0.0, 2.0, 8.0),
-            cgmath::vec3(0.0, 2.0, -8.0),
-        ];
+        let spawn_points: Vec<Vector3<f32>> =
+            vec![cgmath::vec3(0.0, 2.0, 8.0), cgmath::vec3(0.0, 2.0, -8.0)];
 
         spawn_points.iter().for_each(|&point| {
             commands.spawn((Position(point), SpawnPoint::<Enemy>::new()));
