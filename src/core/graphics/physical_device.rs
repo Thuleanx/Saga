@@ -35,21 +35,21 @@ unsafe fn check_physical_device(
     physical_device: vk::PhysicalDevice,
 ) -> Result<()> {
     let properties = instance.get_physical_device_properties(physical_device);
-    if properties.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
-        return Err(anyhow!(SuitabilityError(
-            "Only discrete GPUs are supported."
-        )));
-    }
+    // if properties.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
+    //     return Err(anyhow!(SuitabilityError(
+    //         "Only discrete GPUs are supported."
+    //     )));
+    // }
 
     let features = instance.get_physical_device_features(physical_device);
     if features.sampler_anisotropy != vk::TRUE {
         return Err(anyhow!(SuitabilityError("No sampler anisotropy.")));
     }
-    if features.geometry_shader != vk::TRUE {
-        return Err(anyhow!(SuitabilityError(
-            "Missing geometry shader support."
-        )));
-    }
+    // if features.geometry_shader != vk::TRUE {
+    //     return Err(anyhow!(SuitabilityError(
+    //         "Missing geometry shader support."
+    //     )));
+    // }
 
     QueueFamilyIndices::get(instance, window_surface, physical_device)?;
     check_physical_device_extensions(instance, physical_device)?;
